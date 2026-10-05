@@ -81,10 +81,10 @@ object V2RayCoreUtils {
             val initEnv = coreClazz.methods.firstOrNull { it.name.equals("initCoreEnv", true) }
             if (initEnv != null) {
                 try {
-                    logCallback?.invoke("[EXEC] Init Core Env...")
-                    if (initEnv.parameterTypes.size == 1) {
+                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv...")
+                    if (initEnv.parameterTypes.size == 1 && initEnv.parameterTypes[0] == String::class.java) {
                         initEnv.invoke(null, assetDir)
-                    } else {
+                    } else if (initEnv.parameterTypes.isEmpty()) {
                         initEnv.invoke(null)
                     }
                 } catch (e: Exception) {
@@ -95,7 +95,7 @@ object V2RayCoreUtils {
             // Inisialisasi Controller
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
             if (newControllerMethod != null) {
-                logCallback?.invoke("[EXEC] Menyiapkan CoreController...")
+                logCallback?.invoke("[EXEC] Membuat newCoreController...")
                 val controller = try {
                     if (newControllerMethod.parameterTypes.isNotEmpty()) {
                         newControllerMethod.invoke(null, supportSetInstance)
@@ -103,7 +103,6 @@ object V2RayCoreUtils {
                         newControllerMethod.invoke(null)
                     }
                 } catch (e: Exception) {
-                    logCallback?.invoke("[WARN] newCoreController callback fallback...")
                     newControllerMethod.invoke(null, null)
                 }
 
@@ -111,43 +110,55 @@ object V2RayCoreUtils {
 
                 if (controller != null) {
                     val ctrlClass = controller.javaClass
-                    val methods = ctrlClass.methods
-                    val targetMethod = methods.firstOrNull { m ->
-                        val n = m.name.lowercase()
-                        n.contains("start") || n.contains("run") || n.contains("loop")
+                    
+                    // Set callback handler jika ada method setCallbackHandler
+                    ctrlClass.methods.firstOrNull { it.name.equals("setCallbackHandler", true) }?.let { setCb ->
+                        try {
+                            setCb.invoke(controller, supportSetInstance)
+                        } catch (_: Exception) {}
                     }
 
-                    if (targetMethod != null) {
-                        logCallback?.invoke("[EXEC] Menjalankan ${targetMethod.name} di background thread...")
-                        
-                        coreThread = thread(start = true, name = "V2RayCoreThread") {
+                    // Cari method startLoop
+                    val startLoopMethod = ctrlClass.methods.firstOrNull { it.name.equals("startLoop", true) }
+                    if (startLoopMethod != null) {
+                        val pTypes = startLoopMethod.parameterTypes
+                        val paramNames = pTypes.map { it.simpleName }.joinToString(", ")
+                        logCallback?.invoke("[EXEC] startLoop params: ($paramNames)")
+
+                        coreThread = thread(start = true, name = "V2RayControllerLoop") {
                             try {
-                                val params = targetMethod.parameterTypes
-                                when (params.size) {
+                                when (pTypes.size) {
+                                    0 -> startLoopMethod.invoke(controller)
                                     1 -> {
-                                        if (params[0] == String::class.java) {
-                                            targetMethod.invoke(controller, configJson)
-                                        } else if (params[0] == Int::class.javaPrimitiveType || params[0] == Long::class.javaPrimitiveType) {
-                                            targetMethod.invoke(controller, tunFd)
+                                        if (pTypes[0] == String::class.java) {
+                                            startLoopMethod.invoke(controller, configJson)
+                                        } else if (pTypes[0] == Int::class.javaPrimitiveType || pTypes[0] == Long::class.javaPrimitiveType) {
+                                            startLoopMethod.invoke(controller, tunFd)
                                         } else {
-                                            targetMethod.invoke(controller, null)
+                                            startLoopMethod.invoke(controller, null)
                                         }
                                     }
-                                    2 -> targetMethod.invoke(controller, configJson, tunFd)
-                                    else -> targetMethod.invoke(controller)
+                                    2 -> {
+                                        if (pTypes[0] == String::class.java && (pTypes[1] == Int::class.javaPrimitiveType || pTypes[1] == Long::class.javaPrimitiveType)) {
+                                            startLoopMethod.invoke(controller, configJson, tunFd)
+                                        } else {
+                                            startLoopMethod.invoke(controller, tunFd, configJson)
+                                        }
+                                    }
+                                    else -> logCallback?.invoke("[WARN] startLoop butuh ${pTypes.size} parameter yang tidak dikenal.")
                                 }
-                            } catch (e: Throwable) {
-                                Log.e(TAG, "Core thread exception: ${e.message}", e)
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "startLoop crash: ${t.message}", t)
                             }
                         }
 
-                        logCallback?.invoke("[CORE SUCCESS] Engine berjalan di background thread!")
+                        logCallback?.invoke("[CORE SUCCESS] Engine Controller aktif di background thread!")
                         return true
                     }
                 }
             }
 
-            logCallback?.invoke("[WARN] Tidak menemukan method start/loop yang cocok.")
+            logCallback?.invoke("[WARN] Controller tidak ditemukan.")
             return true
         } catch (e: Throwable) {
             logCallback?.invoke("[FATAL] Error start: ${e.message}")
@@ -161,8 +172,7 @@ object V2RayCoreUtils {
             val controller = activeController
             if (controller != null) {
                 val stopMethod = controller.javaClass.methods.firstOrNull { 
-                    val n = it.name.lowercase()
-                    n.contains("stop") || n.contains("close") 
+                    it.name.equals("stopLoop", true) || it.name.lowercase().contains("stop") 
                 }
                 stopMethod?.invoke(controller)
                 activeController = null
@@ -173,12 +183,6 @@ object V2RayCoreUtils {
             } catch (_: Exception) {}
             coreThread = null
 
-            val coreClazz = Class.forName("libv2ray.Libv2ray")
-            val stopMethod = coreClazz.methods.firstOrNull { 
-                val n = it.name.lowercase()
-                n.contains("stop") || n.contains("close") 
-            }
-            stopMethod?.invoke(null)
             logCallback?.invoke("[CORE] Engine dihentikan.")
         } catch (e: Exception) {
             Log.w(TAG, "stopCore warning: ${e.message}")
