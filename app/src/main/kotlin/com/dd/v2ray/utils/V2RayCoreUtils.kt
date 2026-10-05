@@ -167,15 +167,14 @@ object V2RayCoreUtils {
             val newPointMethod = coreClazz.methods.firstOrNull { it.name.equals("newV2RayPoint", ignoreCase = true) }
             if (newPointMethod != null && supportSetInstance != null) {
                 logCallback?.invoke("[EXEC] Membuat V2RayPoint...")
-                val point = if (newPointMethod.parameterTypes.size == 2) {
-                    newPointMethod.invoke(null, supportSetInstance, false)
-                } else {
-                    newPointMethod.invoke(null, supportSetInstance)
+                val point = when (newPointMethod.parameterTypes.size) {
+                    2 -> newPointMethod.invoke(null, supportSetInstance, false)
+                    1 -> newPointMethod.invoke(null, supportSetInstance)
+                    else -> newPointMethod.invoke(null)
                 }
                 v2rayPointInstance = point
 
                 if (point != null) {
-                    // Masukkan konfigurasi JSON
                     val setConfigMethod = point.javaClass.methods.firstOrNull { 
                         it.name.contains("config", ignoreCase = true) && 
                         it.parameterTypes.isNotEmpty() && 
@@ -192,7 +191,6 @@ object V2RayCoreUtils {
                         field?.set(point, finalConfig)
                     }
 
-                    // Jalankan Core (runLoop / start)
                     val runMethod = point.javaClass.methods.firstOrNull { 
                         it.name.equals("runLoop", ignoreCase = true) || it.name.startsWith("start", ignoreCase = true) 
                     }
