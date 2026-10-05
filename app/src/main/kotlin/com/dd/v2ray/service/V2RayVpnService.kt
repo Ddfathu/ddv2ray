@@ -24,13 +24,10 @@ class V2RayVpnService : VpnService() {
         createNotificationChannel()
         startForeground(1, createNotification())
 
-        // 1. Inisialisasi Interface VPN
         if (setupVpn()) {
             val pfd = vpnInterface
             if (pfd != null && configJson.isNotEmpty()) {
                 val fd = pfd.detachFd()
-                
-                // 2. Tembak TUN FD + Proteksi Socket ke Core V2Ray Native
                 V2RayCoreUtils.startCoreWithTun(this, configJson, fd)
             }
         }
@@ -42,22 +39,17 @@ class V2RayVpnService : VpnService() {
         return try {
             val builder = Builder()
             
-            // Setting IP Virtual Local
             builder.addAddress("10.0.0.2", 24)
-            
-            // Route SEMUA Trafik Internet (IPv4 & IPv6 if needed)
             builder.addRoute("0.0.0.0", 0)
-            
-            // DNS Server Lokal (Dipaksa lewat V2Ray Core)
             builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("8.8.8.8")
             
             builder.setSession("DDV2Ray")
             builder.setMtu(1500)
 
-            // WAJIB: Aplikasi DDV2Ray itu sendiri dibypass biar koneksi ke VPS kaga ke-looping
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                builder.addDisallowedApplication(packageName)
+                val currentPkg: String = applicationContext.packageName
+                builder.addDisallowedApplication(currentPkg)
             }
 
             vpnInterface = builder.establish()
@@ -69,7 +61,6 @@ class V2RayVpnService : VpnService() {
         }
     }
 
-    // Dipanggil otomatis jika V2Ray Core butuh protect socket
     override fun protect(socket: Int): Boolean {
         return super.protect(socket)
     }

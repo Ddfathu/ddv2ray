@@ -107,12 +107,10 @@ object V2RayCoreUtils {
     ): String {
         val root = JSONObject()
 
-        // Log Level
         root.put("log", JSONObject().apply {
             put("loglevel", "warning")
         })
 
-        // DNS Internal Anti DNS Leak
         root.put("dns", JSONObject().apply {
             put("servers", JSONArray().apply {
                 put("1.1.1.1")
@@ -120,7 +118,6 @@ object V2RayCoreUtils {
             })
         })
 
-        // Inbound Local SOCKS5 (Support TCP + UDP)
         val inbound = JSONObject().apply {
             put("port", 10808)
             put("listen", "127.0.0.1")
@@ -131,7 +128,6 @@ object V2RayCoreUtils {
             })
         }
 
-        // Outbound Server
         val outbound = JSONObject().apply {
             put("protocol", protocol)
 
@@ -194,8 +190,12 @@ object V2RayCoreUtils {
             put("tag", "direct")
         }
 
+        val outboundsArray = JSONArray()
+        outboundsArray.put(outbound)
+        outboundsArray.put(directOutbound)
+
         root.put("inbounds", JSONArray().apply { put(inbound) })
-        root.put("outbounds", JSONArray().apply { put(outbound, directOutbound) })
+        root.put("outbounds", outboundsArray)
 
         return root.toString(2)
     }
@@ -224,11 +224,9 @@ object V2RayCoreUtils {
             Log.d("V2RayCoreUtils", "Initializing Native Libv2ray Core...")
             Log.d("V2RayCoreUtils", "Assets: $assetPath | TUN FD: $tunFd")
 
-            // Reflektif JNI Call langsung ke Libv2ray.aar
             try {
                 val libClazz = Class.forName("libv2ray.Libv2ray")
 
-                // 1. Inisialisasi Environment Asset
                 try {
                     val initMethod = libClazz.getMethod("initV2Env", String::class.java)
                     initMethod.invoke(null, assetPath)
@@ -236,7 +234,6 @@ object V2RayCoreUtils {
                     Log.w("V2RayCoreUtils", "initV2Env skipped/not present: ${e.message}")
                 }
 
-                // 2. Start V2Ray Point + Tun2Socks Bridge
                 try {
                     val startMethod = libClazz.getMethod("startV2Ray", String::class.java, Int::class.javaPrimitiveType)
                     startMethod.invoke(null, configJson, tunFd)
