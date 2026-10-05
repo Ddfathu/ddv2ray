@@ -32,6 +32,9 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
 }
 
 tasks.whenTaskAdded { task ->
@@ -41,11 +44,15 @@ tasks.whenTaskAdded { task ->
 }
 
 dependencies {
+    implementation 'androidx.core:core-ktx:1.10.1'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.9.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation 'androidx.core:core-ktx:1.10.1'
-    
-    // Import AAR dari app/libs via flatDir
+
+    // Library Scanner QR Code (ZXing Barcode Embedded)
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'com.google.zxing:core:3.5.1'
+
+    // Native libv2ray Core AAR
     implementation(name: 'libv2ray', ext: 'aar')
 }
