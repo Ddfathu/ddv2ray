@@ -14,29 +14,31 @@ import com.dd.v2ray.utils.V2RayCoreUtils
 
 class V2RayVpnService : VpnService() {
 
+    companion object {
+        private const val CHANNEL_ID = "DDV2Ray_VPN_Channel"
+    }
+
     private var vpnInterface: ParcelFileDescriptor? = null
-    private val CHANNEL_ID = "DDV2Ray_VPN_Channel"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val configJson = intent?.getStringExtra("CONFIG_JSON") ?: ""
+        val configJson: String = intent?.getStringExtra("CONFIG_JSON") ?: ""
         Log.d("V2RayVpnService", "Starting VPN Service...")
 
         createNotificationChannel()
         startForeground(1, createNotification())
 
         try {
-            val builder: Builder = Builder()
+            val builder = Builder()
             builder.addAddress("10.0.0.2", 24)
             builder.addRoute("0.0.0.0", 0)
             builder.addDnsServer("1.1.1.1")
             builder.setSession("DDV2Ray")
             builder.setMtu(1500)
-            
+
             vpnInterface = builder.establish()
             val pfd = vpnInterface
             if (pfd != null && configJson.isNotEmpty()) {
                 val fd = pfd.detachFd()
-                // Pastikan pemanggilan di bawah ini menggunakan variabel configJson yang benar (bukan referensi properti)
                 V2RayCoreUtils.startCoreWithTun(this, configJson, fd)
             }
         } catch (e: Exception) {
@@ -57,13 +59,13 @@ class V2RayVpnService : VpnService() {
                 "DDV2Ray Service Channel",
                 NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(Context::NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+            val manager = getSystemService(Context::NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setContentTitle("DDV2Ray Connected")
             .setContentText("Layanan VPN aktif")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
@@ -80,7 +82,14 @@ class V2RayVpnService : VpnService() {
             Log.e("V2RayVpnService", "Error closing interface: ${e.message}")
         }
         vpnInterface = null
-        stopForeground(true)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+
         Log.d("V2RayVpnService", "V2Ray VPN Service Stopped")
     }
 }
