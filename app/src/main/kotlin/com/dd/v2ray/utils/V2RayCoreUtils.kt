@@ -54,6 +54,7 @@ object V2RayCoreUtils {
         context: Context,
         configJson: String,
         tunFd: Int,
+        supportSetInstance: Any? = null,
         logCallback: ((String) -> Unit)? = null
     ): Boolean {
         try {
@@ -75,7 +76,7 @@ object V2RayCoreUtils {
             logCallback?.invoke("[CORE] Engine: ${coreClazz.name}")
 
             val methods = coreClazz.methods.map { it.name }.distinct()
-            logCallback?.invoke("[METHODS] ${methods.take(10).joinToString(", ")}")
+            logCallback?.invoke("[METHODS] ${methods.take(15).joinToString(", ")}")
 
             for (m in coreClazz.methods) {
                 if (m.name.startsWith("init", true)) {
