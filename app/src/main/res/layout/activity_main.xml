@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center" android:layout_height="match_parent" android:layout_width="match_parent" android:orientation="vertical" android:padding="16dp" xmlns:android="[http://schemas.android.com/apk/res/android](http://schemas.android.com/apk/res/android)">
+
+    <TextView android:layout_height="wrap_content" android:layout_marginBottom="24dp" android:layout_width="wrap_content" android:text="DD V2Ray Manager" android:textSize="24sp" android:textStyle="bold"/>
+
+    <EditText android:background="@android:drawable/editbox_background" android:gravity="top|start" android:hint="Paste V2Ray Config / URL (vmess://, vless://, dll)" android:id="@+id/etConfig" android:layout_height="120dp" android:layout_width="match_parent" android:padding="8dp"/>
+
+    <Button android:id="@+id/btnConnect" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:layout_width="match_parent" android:text="Connect"/>
+
+</LinearLayout>
