@@ -36,7 +36,6 @@ object V2RayCoreUtils {
         }
     }
 
-    // KONVERTER VLESS ASLI KE JSON XRAY/V2RAY LENGKAP
     fun parseUrlToJson(shareUrl: String): String {
         val trimmed = shareUrl.trim()
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
@@ -69,15 +68,11 @@ object V2RayCoreUtils {
                 val path = queryMap["path"] ?: "/"
                 val encryption = queryMap["encryption"] ?: "none"
 
-                // Susun Full Config JSON
                 val root = JSONObject()
-
-                // Log
                 root.put("log", JSONObject().apply {
                     put("loglevel", "warning")
                 })
 
-                // Inbounds (TUN / Dokodemo / Socks)
                 val inbounds = JSONArray()
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
@@ -87,10 +82,6 @@ object V2RayCoreUtils {
                     put("settings", JSONObject().apply {
                         put("auth", "noauth")
                         put("udp", true)
-                    })
-                    put("sniffing", JSONObject().apply {
-                        put("enabled", true)
-                        put("destOverride", JSONArray().put("http").put("tls"))
                     })
                 })
                 inbounds.put(JSONObject().apply {
@@ -105,7 +96,6 @@ object V2RayCoreUtils {
                 })
                 root.put("inbounds", inbounds)
 
-                // Outbounds (VLESS ke remote server)
                 val outbounds = JSONArray()
                 val vlessOutbound = JSONObject().apply {
                     put("tag", "proxy")
@@ -124,7 +114,6 @@ object V2RayCoreUtils {
                         put("vnext", vnext)
                     })
 
-                    // StreamSettings
                     val streamSettings = JSONObject().apply {
                         put("network", type)
                         put("security", security)
@@ -151,23 +140,17 @@ object V2RayCoreUtils {
                 }
                 outbounds.put(vlessOutbound)
 
-                // Direct & Block
                 outbounds.put(JSONObject().apply {
                     put("tag", "direct")
                     put("protocol", "freedom")
-                })
-                outbounds.put(JSONObject().apply {
-                    put("tag", "block")
-                    put("protocol", "blackhole")
                 })
                 root.put("outbounds", outbounds)
 
                 return root.toString()
             } catch (e: Exception) {
-                Log.e(TAG, "Gagal mengonversi VLESS URL: ${e.message}")
+                Log.e(TAG, "Gagal konversi VLESS URL: ${e.message}")
             }
         }
-
         return "{}"
     }
 
@@ -181,15 +164,14 @@ object V2RayCoreUtils {
         try {
             copyAssetsIfNeeded(context, logCallback)
             val assetDir = context.filesDir.absolutePath
+            val cacheDir = context.cacheDir.absolutePath
 
             try {
                 System.setProperty("v2ray.location.asset", assetDir)
                 System.setProperty("xray.location.asset", assetDir)
-                System.setProperty("xray.tun.fd", tunFd.toString())
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     Os.setenv("V2RAY_LOCATION_ASSET", assetDir, true)
                     Os.setenv("XRAY_LOCATION_ASSET", assetDir, true)
-                    Os.setenv("xray.tun.fd", tunFd.toString(), true)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Setenv: ${e.message}")
@@ -197,17 +179,16 @@ object V2RayCoreUtils {
 
             val coreClazz = Class.forName("libv2ray.Libv2ray")
 
-            // Inisialisasi Environment
+            // Inisialisasi Environment dengan 2 parameter (assetDir, cacheDir)
             val initEnv = coreClazz.methods.firstOrNull { it.name.equals("initCoreEnv", true) }
             if (initEnv != null) {
                 try {
-                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv...")
-                    if (initEnv.parameterTypes.size == 1) {
-                        initEnv.invoke(null, assetDir)
-                    } else if (initEnv.parameterTypes.size == 2) {
-                        initEnv.invoke(null, assetDir, "")
-                    } else {
-                        initEnv.invoke(null)
+                    val pCount = initEnv.parameterTypes.size
+                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv (params: $pCount)...")
+                    when (pCount) {
+                        2 -> initEnv.invoke(null, assetDir, cacheDir)
+                        1 -> initEnv.invoke(null, assetDir)
+                        else -> initEnv.invoke(null)
                     }
                 } catch (e: Exception) {
                     logCallback?.invoke("[WARN] initCoreEnv: ${e.message}")
@@ -235,16 +216,10 @@ object V2RayCoreUtils {
                     val startLoopMethod = ctrlClass.methods.firstOrNull { it.name.equals("startLoop", true) }
 
                     if (startLoopMethod != null) {
-                        val pTypes = startLoopMethod.parameterTypes
-                        logCallback?.invoke("[EXEC] Config JSON siap: ${configJson.take(60)}...")
-
+                        logCallback?.invoke("[EXEC] Menjalankan startLoop...")
                         coreThread = thread(start = true, name = "V2RayCoreThread", isDaemon = true) {
                             try {
-                                if (pTypes.size == 1) {
-                                    startLoopMethod.invoke(controller, configJson)
-                                } else if (pTypes.size == 2) {
-                                    startLoopMethod.invoke(controller, configJson, tunFd)
-                                }
+                                startLoopMethod.invoke(controller, configJson)
                             } catch (t: Throwable) {
                                 Log.e(TAG, "startLoop error: ${t.message}", t)
                             }
@@ -257,7 +232,7 @@ object V2RayCoreUtils {
                 }
             }
 
-            logCallback?.invoke("[WARN] Controller gagal dijalankan.")
+            logCallback?.invoke("[WARN] Controller gagal dimulai.")
             return false
         } catch (e: Throwable) {
             logCallback?.invoke("[FATAL] Error start: ${e.message}")
