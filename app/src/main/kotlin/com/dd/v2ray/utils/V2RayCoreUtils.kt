@@ -38,8 +38,58 @@ object V2RayCoreUtils {
     }
 
     /**
-     * Menyuntikkan inbound dokodemo-door (TUN bridge) dan socks lokal ke dalam config JSON
-     * agar traffic IP dari Android VpnService dapat diproses oleh Xray Core.
+     * Mengonversi share link (vmess://, vless://, trojan://, ss://) menjadi format JSON Xray.
+     * Menggunakan fungsi native libXray (ConvertShareLinksToXrayJson) jika tersedia.
+     */
+    fun parseUrlToJson(shareUrl: String): String {
+        return try {
+            val libClazz = Class.forName("libXray.LibXray")
+            val invokeMethod = libClazz.getMethod("invoke", String::class.java)
+
+            val apiVersion = try {
+                libClazz.getField("LibXrayAPIVersion").getLong(null)
+            } catch (e: Exception) {
+                3L
+            }
+
+            // Payload untuk ConvertShareLinksToXrayJson
+            val payload = JSONObject().apply {
+                put("text", shareUrl.trim())
+            }
+
+            val rawBytes = payload.toString().toByteArray(Charsets.UTF_8)
+            val base64Data = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
+
+            val invokeRequest = JSONObject().apply {
+                put("apiVersion", apiVersion)
+                put("name", "ConvertShareLinksToXrayJson")
+                put("data", base64Data)
+            }
+
+            val responseStr = invokeMethod.invoke(null, invokeRequest.toString()) as? String ?: ""
+            val resObj = JSONObject(responseStr)
+
+            if (resObj.optBoolean("success", false)) {
+                // Di Go, output data string yang dikembalikan bisa berupa raw JSON atau base64
+                val dataStr = resObj.optString("data", "")
+                try {
+                    val decodedBytes = Base64.decode(dataStr, Base64.DEFAULT)
+                    String(decodedBytes, Charsets.UTF_8)
+                } catch (_: Exception) {
+                    dataStr
+                }
+            } else {
+                Log.e(TAG, "Gagal convert share link: ${resObj.optString("error")}")
+                "{}"
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception di parseUrlToJson: ${e.message}")
+            "{}"
+        }
+    }
+
+    /**
+     * Menyuntikkan inbound dokodemo-door (TUN bridge) dan socks lokal ke dalam config JSON.
      */
     fun prepareConfigForTun(rawConfigJson: String): String {
         return try {
@@ -56,7 +106,6 @@ object V2RayCoreUtils {
                 if (protocol == "socks") hasSocks = true
             }
 
-            // Inbound Dokodemo-door untuk menangkap dan merutekan traffic TUN Layer-3
             if (!hasDokodemo) {
                 val dokoInbound = JSONObject().apply {
                     put("tag", "tun-in")
@@ -75,7 +124,6 @@ object V2RayCoreUtils {
                 inbounds.put(dokoInbound)
             }
 
-            // Inbound Socks lokal di port 10808 sebagai fallback
             if (!hasSocks) {
                 val socksInbound = JSONObject().apply {
                     put("tag", "socks-in")
@@ -139,16 +187,16 @@ object V2RayCoreUtils {
 
             val invokeMethod = libClazz.getMethod("invoke", String::class.java)
 
-            // Sub-payload RunXrayRequest: { xrayJson: "<config>" }
+            // Sub-payload RunXrayRequest
             val runPayload = JSONObject().apply {
                 put("xrayJson", preparedConfig)
             }
 
-            // Encode payload ke Base64 sesuai definisi Go Data []uint8
+            // Encode payload ke Base64 (Go Data []uint8)
             val rawPayloadBytes = runPayload.toString().toByteArray(Charsets.UTF_8)
             val base64Data = Base64.encodeToString(rawPayloadBytes, Base64.NO_WRAP)
 
-            // Envelope request Invoke: { apiVersion, name, data }
+            // Envelope request
             val invokeRequest = JSONObject().apply {
                 put("apiVersion", apiVersion)
                 put("name", "RunXray")

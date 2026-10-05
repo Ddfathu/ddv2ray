@@ -72,10 +72,10 @@ class V2RayVpnService : VpnService() {
 
         serviceScope.launch {
             try {
-                // 1. Daftarkan socket protection ke library Xray agar traffic outbound tidak loop back
+                // 1. Daftarkan socket protection ke library Xray
                 registerXrayDialer()
 
-                // 2. Konfigurasi virtual TUN interface
+                // 2. Setup TUN Builder
                 val builder = Builder()
                 builder.setSession("DDV2Ray")
                 builder.setMtu(1500)
@@ -84,10 +84,11 @@ class V2RayVpnService : VpnService() {
                 builder.addDnsServer("8.8.8.8")
                 builder.addRoute("0.0.0.0", 0)
 
-                // Bypass paket aplikasi sendiri
+                // 3. Bypass package sendiri secara eksplisit menggunakan applicationContext
+                val currentPkgName = applicationContext.packageName
                 try {
-                    builder.addDisallowedApplication(packageName)
-                    log("[2/4] Package $packageName di-bypass dari rute TUN.")
+                    builder.addDisallowedApplication(currentPkgName)
+                    log("[2/4] Package $currentPkgName di-bypass dari rute TUN.")
                 } catch (e: Exception) {
                     log("[WARN] Bypass package error: ${e.message}")
                 }
@@ -100,7 +101,7 @@ class V2RayVpnService : VpnService() {
                     log("[3/4] TUN Aktif dengan FD: $fd. Menjalankan core Xray...")
 
                     val success = V2RayCoreUtils.startCoreWithTun(
-                        context = this@V2RayVpnService,
+                        context = applicationContext,
                         configJson = configJson,
                         tunFd = fd,
                         logCallback = { coreMsg -> log(coreMsg) }
@@ -195,7 +196,8 @@ class V2RayVpnService : VpnService() {
     }
 
     private fun createNotification(): Notification {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val currentPkgName = applicationContext.packageName
+        val launchIntent = packageManager.getLaunchIntentForPackage(currentPkgName)
             ?: Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
