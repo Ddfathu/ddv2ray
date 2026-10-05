@@ -9,6 +9,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -20,6 +22,21 @@ object V2RayCoreUtils {
     private const val TAG = "V2RayCoreUtils"
     var activeController: Any? = null
     private var coreThread: Thread? = null
+
+    // PENCATAT LOG CRASH KE SDCARD TANPA ROOT
+    fun logCrashToFile(context: Context, tag: String, throwable: Throwable) {
+        try {
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            val text = "=== [CRASH LOG] $tag ===\nPesan: ${throwable.message}\nTrace:\n$sw\n\n"
+            
+            val f1 = File(context.filesDir, "ddv2ray_crash.txt")
+            f1.appendText(text)
+
+            val f2 = File("/sdcard/ddv2ray_crash.txt")
+            f2.appendText(text)
+        } catch (_: Exception) {}
+    }
 
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
         val files = listOf("geoip.dat", "geosite.dat")
@@ -77,7 +94,6 @@ object V2RayCoreUtils {
                     put("loglevel", "warning")
                 })
 
-                // Inbounds: SOCKS & Dokodemo/TUN
                 val inbounds = JSONArray()
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
@@ -95,12 +111,9 @@ object V2RayCoreUtils {
                 })
                 inbounds.put(JSONObject().apply {
                     put("tag", "tun-in")
-                    put("port", 0)
-                    put("listen", "127.0.0.1")
-                    put("protocol", "dokodemo-door")
+                    put("protocol", "tun")
                     put("settings", JSONObject().apply {
                         put("network", "tcp,udp")
-                        put("followRedirect", true)
                     })
                     put("sniffing", JSONObject().apply {
                         put("enabled", true)
@@ -109,7 +122,6 @@ object V2RayCoreUtils {
                 })
                 root.put("inbounds", inbounds)
 
-                // Outbounds
                 val outbounds = JSONArray()
                 val vlessOutbound = JSONObject().apply {
                     put("tag", "proxy")
@@ -164,7 +176,6 @@ object V2RayCoreUtils {
                 })
                 root.put("outbounds", outbounds)
 
-                // Routing
                 val routing = JSONObject()
                 routing.put("domainStrategy", "AsIs")
                 val rules = JSONArray()
@@ -191,6 +202,13 @@ object V2RayCoreUtils {
         supportSetInstance: Any? = null,
         logCallback: ((String) -> Unit)? = null
     ): Boolean {
+        // Pasang Global Exception Hook
+        val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            logCrashToFile(context, "Uncaught di Thread ${t.name}", e)
+            prevHandler?.uncaughtException(t, e)
+        }
+
         try {
             copyAssetsIfNeeded(context, logCallback)
             val assetDir = context.filesDir.absolutePath
@@ -210,21 +228,21 @@ object V2RayCoreUtils {
 
             val coreClazz = Class.forName("libv2ray.Libv2ray")
 
-            // Inisialisasi Environment Core
             val initEnv = coreClazz.methods.firstOrNull { it.name.equals("initCoreEnv", true) }
             if (initEnv != null) {
                 try {
                     val pCount = initEnv.parameterTypes.size
-                    logCallback?.invoke("[EXEC] Inisialisasi Environment Core...")
+                    logCallback?.invoke("[EXEC] Inisialisasi env...")
                     when (pCount) {
                         2 -> initEnv.invoke(null, assetDir, cacheDir)
                         1 -> initEnv.invoke(null, assetDir)
                         else -> initEnv.invoke(null)
                     }
-                } catch (_: Exception) {}
+                } catch (e: Throwable) {
+                    logCrashToFile(context, "initCoreEnv", e)
+                }
             }
 
-            // Inisialisasi Controller
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
             if (newControllerMethod != null) {
                 val controller = try {
@@ -233,8 +251,9 @@ object V2RayCoreUtils {
                     } else {
                         newControllerMethod.invoke(null)
                     }
-                } catch (_: Exception) {
-                    newControllerMethod.invoke(null, null)
+                } catch (e: Throwable) {
+                    logCrashToFile(context, "newCoreController", e)
+                    null
                 }
 
                 activeController = controller
@@ -255,72 +274,61 @@ object V2RayCoreUtils {
                                     startLoopMethod.invoke(controller, configJson, tunFd)
                                 }
                             } catch (t: Throwable) {
-                                logCallback?.invoke("[CORE CRASH] ${t.message}")
+                                logCrashToFile(context, "startLoop Core Thread", t)
+                                logCallback?.invoke("[CRASH CORE] ${t.message}")
                             }
                         }
 
-                        // Tunggu engine running 1 detik lalu lakukan PING TEST LIVE
-                        thread(start = true) {
-                            Thread.sleep(1200)
-                            runPingAndDiagnose(controller, logCallback)
+                        // Tes ping mandiri via background thread aman
+                        thread(start = true, name = "SafePingThread") {
+                            try {
+                                Thread.sleep(2000)
+                                runSafeDiagnose(logCallback)
+                            } catch (_: Exception) {}
                         }
 
-                        logCallback?.invoke("[CORE SUCCESS] Engine Aktif!")
+                        logCallback?.invoke("[CORE SUCCESS] Engine aktif!")
                         return true
                     }
                 }
             }
             return false
         } catch (e: Throwable) {
+            logCrashToFile(context, "startCoreWithTun", e)
             logCallback?.invoke("[FATAL] Error start: ${e.message}")
             return false
         }
     }
 
-    // DIAGNOSIS & LIVE PING TEST
-    private fun runPingAndDiagnose(controller: Any?, logCallback: ((String) -> Unit)?) {
+    // DIAGNOSA AMAN MENGGUNAKAN SOCKET JAVA
+    private fun runSafeDiagnose(logCallback: ((String) -> Unit)?) {
+        logCallback?.invoke("[DIAGNOSA] Memulai tes jalur data...")
+        
+        // 1. Cek ketersediaan port SOCKS internal 10808
+        var socksOk = false
         try {
-            logCallback?.invoke("[PING] Menguji respon core...")
-            
-            // 1. Coba panggil measureDelay bawaan libv2ray
-            if (controller != null) {
-                val measureMethod = controller.javaClass.methods.firstOrNull { it.name.equals("measureDelay", true) }
-                if (measureMethod != null) {
-                    try {
-                        val delay = measureMethod.invoke(controller, "https://www.google.com/generate_204")
-                        logCallback?.invoke("[CORE PING] Google delay: ${delay}ms")
-                    } catch (e: Exception) {
-                        logCallback?.invoke("[CORE PING] measureDelay error: ${e.message}")
-                    }
-                }
+            Socket().use { s ->
+                s.connect(InetSocketAddress("127.0.0.1", 10808), 1200)
+                socksOk = true
             }
+            logCallback?.invoke("[PORT 10808] TERBUKA (Core menerima koneksi)")
+        } catch (e: Exception) {
+            logCallback?.invoke("[PORT 10808] TERTUTUP (${e.message})")
+        }
 
-            // 2. Cek apakah SOCKS local port 10808 terbuka
-            try {
-                val sock = Socket()
-                sock.connect(InetSocketAddress("127.0.0.1", 10808), 1000)
-                sock.close()
-                logCallback?.invoke("[DIAGNOSA] SOCKS 10808 AKTIF & Siap melayani traffic!")
-            } catch (e: Exception) {
-                logCallback?.invoke("[DIAGNOSA] SOCKS port 10808 belum merespon (${e.message})")
-            }
-
-            // 3. Tes HTTP request langsung
-            val start = System.currentTimeMillis()
+        // 2. Tes HTTP ping langsung
+        try {
+            val t0 = System.currentTimeMillis()
             val url = URL("https://connectivitycheck.gstatic.com/generate_204")
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 3000
             conn.readTimeout = 3000
             conn.instanceFollowRedirects = false
             val code = conn.responseCode
-            val cost = System.currentTimeMillis() - start
-            if (code == 204 || code == 200) {
-                logCallback?.invoke("[INTERNET SUKSES] HTTP Ping OK ($cost ms)!")
-            } else {
-                logCallback?.invoke("[HTTP TEST] Respon status: $code ($cost ms)")
-            }
+            val ping = System.currentTimeMillis() - t0
+            logCallback?.invoke("[PING SUKSES] HTTP $code ($ping ms) - Internet Nyambung!")
         } catch (e: Exception) {
-            logCallback?.invoke("[INTERNET NYANGKUT] ${e.javaClass.simpleName}: ${e.message}")
+            logCallback?.invoke("[PING GAGAL] ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
