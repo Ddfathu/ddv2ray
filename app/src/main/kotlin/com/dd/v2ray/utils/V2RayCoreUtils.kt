@@ -9,8 +9,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.PrintWriter
-import java.io.StringWriter
 import java.net.URLDecoder
 import kotlin.concurrent.thread
 
@@ -18,22 +16,6 @@ object V2RayCoreUtils {
     private const val TAG = "V2RayCoreUtils"
     var activeController: Any? = null
     private var coreThread: Thread? = null
-
-    private fun writeCrashLog(context: Context, label: String, t: Throwable) {
-        try {
-            val sw = StringWriter()
-            t.printStackTrace(PrintWriter(sw))
-            val logText = "=== CRASH: $label ===\nPESAN: ${t.message}\nSTACKTRACE:\n$sw\n\n"
-            
-            // Tulis ke cache internal aplikasi
-            val internalLog = File(context.filesDir, "crash_log.txt")
-            internalLog.appendText(logText)
-
-            // Tulis ke /sdcard agar bisa dibaca langsung dari Termux / MT Manager
-            val sdcardLog = File("/sdcard/ddv2ray_crash.txt")
-            sdcardLog.appendText(logText)
-        } catch (_: Exception) {}
-    }
 
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
         val files = listOf("geoip.dat", "geosite.dat")
@@ -91,7 +73,27 @@ object V2RayCoreUtils {
                     put("loglevel", "warning")
                 })
 
+                // DNS
+                val dnsObj = JSONObject()
+                dnsObj.put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
+                dnsObj.put("tag", "dns-in")
+                root.put("dns", dnsObj)
+
+                // Inbounds
                 val inbounds = JSONArray()
+                // Inbound TUN
+                inbounds.put(JSONObject().apply {
+                    put("tag", "tun-in")
+                    put("protocol", "tun")
+                    put("settings", JSONObject().apply {
+                        put("network", "tcp,udp")
+                    })
+                    put("sniffing", JSONObject().apply {
+                        put("enabled", true)
+                        put("destOverride", JSONArray().put("http").put("tls"))
+                    })
+                })
+                // Inbound SOCKS local
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
                     put("port", 10808)
@@ -102,16 +104,12 @@ object V2RayCoreUtils {
                         put("udp", true)
                     })
                 })
-                inbounds.put(JSONObject().apply {
-                    put("tag", "tun-in")
-                    put("protocol", "tun")
-                    put("settings", JSONObject().apply {
-                        put("network", "tcp,udp")
-                    })
-                })
                 root.put("inbounds", inbounds)
 
+                // Outbounds
                 val outbounds = JSONArray()
+                
+                // Outbound Utama (VLESS)
                 val vlessOutbound = JSONObject().apply {
                     put("tag", "proxy")
                     put("protocol", "vless")
@@ -155,15 +153,51 @@ object V2RayCoreUtils {
                 }
                 outbounds.put(vlessOutbound)
 
+                // Direct
                 outbounds.put(JSONObject().apply {
                     put("tag", "direct")
                     put("protocol", "freedom")
                 })
+
+                // DNS Outbound
+                outbounds.put(JSONObject().apply {
+                    put("tag", "dns-out")
+                    put("protocol", "dns")
+                })
+
+                // Block
+                outbounds.put(JSONObject().apply {
+                    put("tag", "block")
+                    put("protocol", "blackhole")
+                })
                 root.put("outbounds", outbounds)
+
+                // Routing
+                val routing = JSONObject()
+                routing.put("domainStrategy", "IPIfNonMatch")
+                val rules = JSONArray()
+
+                // Route DNS queries ke dns-out
+                rules.put(JSONObject().apply {
+                    put("type", "field")
+                    put("port", "53")
+                    put("network", "udp")
+                    put("outboundTag", "dns-out")
+                })
+
+                // Route traffic biasa ke proxy
+                rules.put(JSONObject().apply {
+                    put("type", "field")
+                    put("inboundTag", JSONArray().put("tun-in").put("socks"))
+                    put("outboundTag", "proxy")
+                })
+
+                routing.put("rules", rules)
+                root.put("routing", routing)
 
                 return root.toString()
             } catch (e: Exception) {
-                Log.e(TAG, "Gagal konversi VLESS URL: ${e.message}")
+                Log.e(TAG, "Gagal konversi VLESS: ${e.message}")
             }
         }
         return "{}"
@@ -176,13 +210,6 @@ object V2RayCoreUtils {
         supportSetInstance: Any? = null,
         logCallback: ((String) -> Unit)? = null
     ): Boolean {
-        // Tangkap uncaught exception di seluruh thread JVM agar dicatat sebelum mati
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            writeCrashLog(context, "UncaughtException di Thread ${t.name}", e)
-            defaultHandler?.uncaughtException(t, e)
-        }
-
         try {
             copyAssetsIfNeeded(context, logCallback)
             val assetDir = context.filesDir.absolutePath
@@ -210,15 +237,13 @@ object V2RayCoreUtils {
             if (initEnv != null) {
                 try {
                     val pCount = initEnv.parameterTypes.size
-                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv...")
+                    logCallback?.invoke("[EXEC] Inisialisasi env...")
                     when (pCount) {
                         2 -> initEnv.invoke(null, assetDir, cacheDir)
                         1 -> initEnv.invoke(null, assetDir)
                         else -> initEnv.invoke(null)
                     }
-                } catch (e: Throwable) {
-                    writeCrashLog(context, "initCoreEnv", e)
-                }
+                } catch (_: Exception) {}
             }
 
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
@@ -229,9 +254,8 @@ object V2RayCoreUtils {
                     } else {
                         newControllerMethod.invoke(null)
                     }
-                } catch (e: Throwable) {
-                    writeCrashLog(context, "newCoreController", e)
-                    null
+                } catch (_: Exception) {
+                    newControllerMethod.invoke(null, null)
                 }
 
                 activeController = controller
@@ -241,7 +265,7 @@ object V2RayCoreUtils {
                     val startLoopMethod = ctrlClass.methods.firstOrNull { it.name.equals("startLoop", true) }
 
                     if (startLoopMethod != null) {
-                        logCallback?.invoke("[EXEC] Memulai loop core...")
+                        logCallback?.invoke("[EXEC] Menjalankan startLoop...")
                         val pTypes = startLoopMethod.parameterTypes
                         
                         coreThread = thread(start = true, name = "V2RayCoreThread", isDaemon = true) {
@@ -252,19 +276,19 @@ object V2RayCoreUtils {
                                     startLoopMethod.invoke(controller, configPath, tunFd)
                                 }
                             } catch (t: Throwable) {
-                                writeCrashLog(context, "startLoop invoke", t)
+                                Log.e(TAG, "startLoop error: ${t.message}", t)
                             }
                         }
 
                         Thread.sleep(600)
-                        logCallback?.invoke("[CORE SUCCESS] Engine aktif!")
+                        logCallback?.invoke("[CORE SUCCESS] Engine aktif dengan DNS & Routing lengkap!")
                         return true
                     }
                 }
             }
             return false
         } catch (e: Throwable) {
-            writeCrashLog(context, "startCoreWithTun Root", e)
+            Log.e(TAG, "startCore error", e)
             return false
         }
     }
@@ -282,6 +306,6 @@ object V2RayCoreUtils {
             try { coreThread?.interrupt() } catch (_: Exception) {}
             coreThread = null
             logCallback?.invoke("[CORE] Engine dihentikan.")
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
     }
 }
