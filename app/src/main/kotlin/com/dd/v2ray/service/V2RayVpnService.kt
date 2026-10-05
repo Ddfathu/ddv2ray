@@ -13,6 +13,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.dd.v2ray.MainActivity
 import com.dd.v2ray.utils.V2RayCoreUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import java.lang.reflect.Proxy
 
 class V2RayVpnService : VpnService() {
@@ -33,6 +37,7 @@ class V2RayVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
 
     private fun log(msg: String) {
         Log.d(TAG, msg)
@@ -65,53 +70,58 @@ class V2RayVpnService : VpnService() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
 
-        try {
-            // Mendaftarkan perlindungan socket ke engine native libXray
-            registerXrayDialer()
-
-            val builder = Builder()
-            builder.setSession("DDV2Ray")
-            builder.setMtu(1500)
-            builder.addAddress("172.19.0.1", 30)
-
-            builder.addDnsServer("1.1.1.1")
-            builder.addDnsServer("8.8.8.8")
-            builder.addRoute("0.0.0.0", 0)
-
-            // Bypass paket aplikasi sendiri agar koneksi internal tidak tersedot TUN
+        serviceScope.launch {
             try {
-                builder.addDisallowedApplication(packageName)
-                log("[2/4] Package sendiri di-bypass dari rute TUN.")
-            } catch (e: Exception) {
-                log("[WARN] Bypass package error: ${e.message}")
-            }
+                // 1. Daftarkan socket protection ke library Xray agar traffic outbound tidak loop back
+                registerXrayDialer()
 
-            vpnInterface = builder.establish()
-            val pfd = vpnInterface
+                // 2. Konfigurasi virtual TUN interface
+                val builder = Builder()
+                builder.setSession("DDV2Ray")
+                builder.setMtu(1500)
+                builder.addAddress("172.19.0.1", 30)
+                builder.addDnsServer("1.1.1.1")
+                builder.addDnsServer("8.8.8.8")
+                builder.addRoute("0.0.0.0", 0)
 
-            if (pfd != null) {
-                val fd = pfd.fd
-                log("[3/4] TUN Aktif dengan FD: $fd. Menjalankan core...")
-
-                val success = V2RayCoreUtils.startCoreWithTun(this, configJson, fd) { coreMsg ->
-                    log(coreMsg)
+                // Bypass paket aplikasi sendiri
+                try {
+                    builder.addDisallowedApplication(packageName)
+                    log("[2/4] Package $packageName di-bypass dari rute TUN.")
+                } catch (e: Exception) {
+                    log("[WARN] Bypass package error: ${e.message}")
                 }
 
-                if (success) {
-                    isRunning = true
-                    log("[4/4] CONNECTED! Engine Xray aktif.")
+                vpnInterface = builder.establish()
+                val pfd = vpnInterface
+
+                if (pfd != null) {
+                    val fd = pfd.fd
+                    log("[3/4] TUN Aktif dengan FD: $fd. Menjalankan core Xray...")
+
+                    val success = V2RayCoreUtils.startCoreWithTun(
+                        context = this@V2RayVpnService,
+                        configJson = configJson,
+                        tunFd = fd,
+                        logCallback = { coreMsg -> log(coreMsg) }
+                    )
+
+                    if (success) {
+                        isRunning = true
+                        log("[4/4] CONNECTED! Engine Xray aktif.")
+                    } else {
+                        log("[ERROR] Native Core gagal dijalankan!")
+                        stopVpn()
+                    }
                 } else {
-                    log("[ERROR] Native Core gagal dijalankan!")
+                    log("[ERROR] builder.establish() menghasilkan NULL!")
                     stopVpn()
                 }
-            } else {
-                log("[ERROR] builder.establish() menghasilkan NULL!")
+
+            } catch (e: Exception) {
+                log("[FATAL] Gagal inisialisasi VPN: ${e.message}")
                 stopVpn()
             }
-
-        } catch (e: Exception) {
-            log("[FATAL] Gagal inisialisasi VPN: ${e.message}")
-            stopVpn()
         }
     }
 
@@ -120,15 +130,21 @@ class V2RayVpnService : VpnService() {
             val libClazz = Class.forName("libXray.LibXray")
             val dialerInterface = Class.forName("libXray.DialerController")
 
-            // Proxy dynamic untuk mengarahkan fungsi protect native ke VpnService.protect()
             val proxyInstance = Proxy.newProxyInstance(
                 dialerInterface.classLoader,
                 arrayOf(dialerInterface)
             ) { _, method, args ->
                 val methodName = method.name
-                if (methodName == "protect" || methodName == "dial" || methodName == "protectFD") {
-                    val fd = (args?.get(0) as? Number)?.toLong() ?: 0L
-                    this@V2RayVpnService.protect(fd.toInt())
+                if (methodName.equals("protect", ignoreCase = true) ||
+                    methodName.equals("dial", ignoreCase = true) ||
+                    methodName.equals("protectFd", ignoreCase = true)
+                ) {
+                    val fd = (args?.get(0) as? Number)?.toInt() ?: 0
+                    if (fd > 0) {
+                        this@V2RayVpnService.protect(fd)
+                    } else {
+                        true
+                    }
                 } else {
                     null
                 }
@@ -144,7 +160,7 @@ class V2RayVpnService : VpnService() {
 
     private fun stopVpn() {
         isRunning = false
-        V2RayCoreUtils.stopCore()
+        V2RayCoreUtils.stopCore { log(it) }
 
         try {
             vpnInterface?.close()
@@ -179,7 +195,8 @@ class V2RayVpnService : VpnService() {
     }
 
     private fun createNotification(): Notification {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, MainActivity::class.java)
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -195,8 +212,7 @@ class V2RayVpnService : VpnService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(this)
-            .setChannelId(CHANNEL_ID)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DDV2Ray Aktif")
             .setContentText("Koneksi VPN sedang berjalan")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
