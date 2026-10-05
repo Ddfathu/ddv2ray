@@ -6,10 +6,12 @@ import android.system.Os
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.concurrent.thread
 
 object V2RayCoreUtils {
     private const val TAG = "V2RayCoreUtils"
     var activeController: Any? = null
+    private var coreThread: Thread? = null
 
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
         val files = listOf("geoip.dat", "geosite.dat")
@@ -79,10 +81,10 @@ object V2RayCoreUtils {
             val initEnv = coreClazz.methods.firstOrNull { it.name.equals("initCoreEnv", true) }
             if (initEnv != null) {
                 try {
-                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv...")
-                    if (initEnv.parameterTypes.size == 1 && initEnv.parameterTypes[0] == String::class.java) {
+                    logCallback?.invoke("[EXEC] Init Core Env...")
+                    if (initEnv.parameterTypes.size == 1) {
                         initEnv.invoke(null, assetDir)
-                    } else if (initEnv.parameterTypes.isEmpty()) {
+                    } else {
                         initEnv.invoke(null)
                     }
                 } catch (e: Exception) {
@@ -90,60 +92,64 @@ object V2RayCoreUtils {
                 }
             }
 
-            // Inisialisasi CoreController dengan parameter yang sesuai
+            // Inisialisasi Controller
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
             if (newControllerMethod != null) {
-                logCallback?.invoke("[EXEC] Membuat newCoreController...")
-                
-                val pTypes = newControllerMethod.parameterTypes
-                val controller = if (pTypes.size == 1) {
-                    // Berikan supportSetInstance atau null jika kompatibel
-                    try {
+                logCallback?.invoke("[EXEC] Menyiapkan CoreController...")
+                val controller = try {
+                    if (newControllerMethod.parameterTypes.isNotEmpty()) {
                         newControllerMethod.invoke(null, supportSetInstance)
-                    } catch (_: Exception) {
-                        newControllerMethod.invoke(null, null)
+                    } else {
+                        newControllerMethod.invoke(null)
                     }
-                } else {
-                    newControllerMethod.invoke(null)
+                } catch (e: Exception) {
+                    logCallback?.invoke("[WARN] newCoreController callback fallback...")
+                    newControllerMethod.invoke(null, null)
                 }
-                
+
                 activeController = controller
 
                 if (controller != null) {
-                    val ctrlMethods = controller.javaClass.methods.map { it.name }.distinct()
-                    logCallback?.invoke("[CTRL METHODS] ${ctrlMethods.joinToString(", ")}")
+                    val ctrlClass = controller.javaClass
+                    val methods = ctrlClass.methods
+                    val targetMethod = methods.firstOrNull { m ->
+                        val n = m.name.lowercase()
+                        n.contains("start") || n.contains("run") || n.contains("loop")
+                    }
 
-                    // Jalankan start pada controller
-                    for (m in controller.javaClass.methods) {
-                        val mName = m.name.lowercase()
-                        if (mName.startsWith("start") || mName.startsWith("run")) {
-                            logCallback?.invoke("[EXEC] Menjalankan ${m.name}...")
-                            val params = m.parameterTypes
-                            when (params.size) {
-                                1 -> {
-                                    if (params[0] == String::class.java) {
-                                        m.invoke(controller, configJson)
-                                    } else if (params[0] == Int::class.javaPrimitiveType || params[0] == Long::class.javaPrimitiveType) {
-                                        m.invoke(controller, tunFd)
-                                    } else {
-                                        m.invoke(controller, null)
+                    if (targetMethod != null) {
+                        logCallback?.invoke("[EXEC] Menjalankan ${targetMethod.name} di background thread...")
+                        
+                        coreThread = thread(start = true, name = "V2RayCoreThread") {
+                            try {
+                                val params = targetMethod.parameterTypes
+                                when (params.size) {
+                                    1 -> {
+                                        if (params[0] == String::class.java) {
+                                            targetMethod.invoke(controller, configJson)
+                                        } else if (params[0] == Int::class.javaPrimitiveType || params[0] == Long::class.javaPrimitiveType) {
+                                            targetMethod.invoke(controller, tunFd)
+                                        } else {
+                                            targetMethod.invoke(controller, null)
+                                        }
                                     }
+                                    2 -> targetMethod.invoke(controller, configJson, tunFd)
+                                    else -> targetMethod.invoke(controller)
                                 }
-                                2 -> {
-                                    m.invoke(controller, configJson, tunFd)
-                                }
-                                0 -> m.invoke(controller)
+                            } catch (e: Throwable) {
+                                Log.e(TAG, "Core thread exception: ${e.message}", e)
                             }
-                            logCallback?.invoke("[CORE SUCCESS] Engine Controller AKTIF!")
-                            return true
                         }
+
+                        logCallback?.invoke("[CORE SUCCESS] Engine berjalan di background thread!")
+                        return true
                     }
                 }
             }
 
-            logCallback?.invoke("[WARN] Gagal menginisialisasi controller.")
+            logCallback?.invoke("[WARN] Tidak menemukan method start/loop yang cocok.")
             return true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logCallback?.invoke("[FATAL] Error start: ${e.message}")
             Log.e(TAG, "startCore error", e)
             return false
@@ -160,9 +166,12 @@ object V2RayCoreUtils {
                 }
                 stopMethod?.invoke(controller)
                 activeController = null
-                logCallback?.invoke("[CORE] CoreController dihentikan.")
-                return
             }
+
+            try {
+                coreThread?.interrupt()
+            } catch (_: Exception) {}
+            coreThread = null
 
             val coreClazz = Class.forName("libv2ray.Libv2ray")
             val stopMethod = coreClazz.methods.firstOrNull { 
