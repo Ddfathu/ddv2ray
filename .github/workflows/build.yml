@@ -20,41 +20,30 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Download & Extract v2rayNG Core Library (AAR / Native SO)
+      - name: Download & Extract v2rayNG Core (.so & assets)
         run: |
-          mkdir -p app/libs
           mkdir -p app/src/main/jniLibs
           mkdir -p app/src/main/assets
 
-          echo "===> Mengambil AAR/Assets terbaru dari 2dust/v2rayNG..."
-          
-          # Unduh APK rilis terbaru v2rayNG untuk mengekstrak binary .so dan .dat
+          echo "Mengunduh binary APK v2rayNG terbaru..."
           LATEST_URL=$(curl -s https://api.github.com/repos/2dust/v2rayNG/releases/latest | grep "browser_download_url.*universal.apk" | cut -d '"' -f 4 | head -n 1)
           if [ -z "$LATEST_URL" ]; then
             LATEST_URL=$(curl -s https://api.github.com/repos/2dust/v2rayNG/releases/latest | grep "browser_download_url.*apk" | cut -d '"' -f 4 | head -n 1)
           fi
           
-          echo "Downloading from: $LATEST_URL"
           curl -L -o v2rayng.apk "$LATEST_URL"
-
-          # Ekstrak jniLibs (.so)
           unzip -q v2rayng.apk -d v2ray_temp
-          
+
           if [ -d "v2ray_temp/lib" ]; then
             cp -r v2ray_temp/lib/* app/src/main/jniLibs/
-            echo "[OK] Berhasil mengekstrak native libraries (.so) dari v2rayNG:"
-            ls -la app/src/main/jniLibs/
           fi
 
-          # Ekstrak file aset rule (geoip.dat & geosite.dat)
           if [ -f "v2ray_temp/assets/geoip.dat" ]; then
             cp v2ray_temp/assets/geoip.dat app/src/main/assets/
             cp v2ray_temp/assets/geosite.dat app/src/main/assets/
-            echo "[OK] Berhasil mengekstrak geoip.dat dan geosite.dat dari APK"
           else
             curl -L -o app/src/main/assets/geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
             curl -L -o app/src/main/assets/geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-            echo "[OK] Berhasil mengunduh geoip.dat dan geosite.dat fallback"
           fi
 
           rm -rf v2ray_temp v2rayng.apk
@@ -62,8 +51,8 @@ jobs:
       - name: Grant Execute Permission to Gradlew
         run: chmod +x gradlew
 
-      - name: Clean and Build APK with Gradle
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build APK with Gradle
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
