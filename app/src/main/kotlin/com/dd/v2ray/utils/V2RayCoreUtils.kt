@@ -90,37 +90,58 @@ object V2RayCoreUtils {
                 }
             }
 
-            // Jalankan via newCoreController
+            // Inisialisasi CoreController dengan parameter yang sesuai
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
             if (newControllerMethod != null) {
                 logCallback?.invoke("[EXEC] Membuat newCoreController...")
-                val controller = newControllerMethod.invoke(null)
+                
+                val pTypes = newControllerMethod.parameterTypes
+                val controller = if (pTypes.size == 1) {
+                    // Berikan supportSetInstance atau null jika kompatibel
+                    try {
+                        newControllerMethod.invoke(null, supportSetInstance)
+                    } catch (_: Exception) {
+                        newControllerMethod.invoke(null, null)
+                    }
+                } else {
+                    newControllerMethod.invoke(null)
+                }
+                
                 activeController = controller
 
                 if (controller != null) {
                     val ctrlMethods = controller.javaClass.methods.map { it.name }.distinct()
-                    logCallback?.invoke("[CTRL METHODS] ${ctrlMethods.take(10).joinToString(", ")}")
+                    logCallback?.invoke("[CTRL METHODS] ${ctrlMethods.joinToString(", ")}")
 
-                    // Cari method start di dalam controller
-                    val ctrlStart = controller.javaClass.methods.firstOrNull { 
-                        val n = it.name.lowercase()
-                        n.startsWith("start") || n.startsWith("run") || n.contains("start")
-                    }
-
-                    if (ctrlStart != null) {
-                        logCallback?.invoke("[EXEC] Menjalankan ${ctrlStart.name} pada CoreController...")
-                        if (ctrlStart.parameterTypes.size == 1 && ctrlStart.parameterTypes[0] == String::class.java) {
-                            ctrlStart.invoke(controller, configJson)
-                        } else if (ctrlStart.parameterTypes.isEmpty()) {
-                            ctrlStart.invoke(controller)
+                    // Jalankan start pada controller
+                    for (m in controller.javaClass.methods) {
+                        val mName = m.name.lowercase()
+                        if (mName.startsWith("start") || mName.startsWith("run")) {
+                            logCallback?.invoke("[EXEC] Menjalankan ${m.name}...")
+                            val params = m.parameterTypes
+                            when (params.size) {
+                                1 -> {
+                                    if (params[0] == String::class.java) {
+                                        m.invoke(controller, configJson)
+                                    } else if (params[0] == Int::class.javaPrimitiveType || params[0] == Long::class.javaPrimitiveType) {
+                                        m.invoke(controller, tunFd)
+                                    } else {
+                                        m.invoke(controller, null)
+                                    }
+                                }
+                                2 -> {
+                                    m.invoke(controller, configJson, tunFd)
+                                }
+                                0 -> m.invoke(controller)
+                            }
+                            logCallback?.invoke("[CORE SUCCESS] Engine Controller AKTIF!")
+                            return true
                         }
-                        logCallback?.invoke("[CORE SUCCESS] Engine Controller AKTIF!")
-                        return true
                     }
                 }
             }
 
-            logCallback?.invoke("[WARN] CoreController tidak memiliki start method!")
+            logCallback?.invoke("[WARN] Gagal menginisialisasi controller.")
             return true
         } catch (e: Exception) {
             logCallback?.invoke("[FATAL] Error start: ${e.message}")
