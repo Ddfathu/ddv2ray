@@ -20,28 +20,42 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Download & Setup v2rayNG Core (AAR & Assets)
+      - name: Setup v2rayNG Core (Extract JAR & JNI Libs)
         run: |
           mkdir -p app/libs
           mkdir -p app/src/main/jniLibs
           mkdir -p app/src/main/assets
+          mkdir -p /tmp/aar_extract
 
-          echo "===> Mengambil libv2ray.aar..."
-          # Unduh AAR libv2ray resmi yang digunakan oleh v2rayNG
-          curl -L -o app/libs/libv2ray.aar https://github.com/2dust/v2rayNG/raw/master/V2rayNG/app/libs/libv2ray.aar || true
+          echo "Mengunduh libv2ray.aar..."
+          curl -L -o /tmp/libv2ray.aar https://github.com/2dust/AndroidLibV2rayLite/releases/latest/download/libv2ray.aar
 
-          # Jika link master di atas kosong, buat fallback dummy AAR atau ambil dari release
-          if [ ! -s app/libs/libv2ray.aar ]; then
-            echo "Mengambil AAR dari repositori release binary..."
-            curl -L -o app/libs/libv2ray.aar https://github.com/2dust/AndroidLibV2rayLite/releases/latest/download/libv2ray.aar
+          echo "Mengekstrak classes.jar dan native libs dari AAR..."
+          unzip -q /tmp/libv2ray.aar -d /tmp/aar_extract
+
+          # Pindahkan classes.jar menjadi app/libs/libv2ray.jar
+          if [ -f "/tmp/aar_extract/classes.jar" ]; then
+            cp /tmp/aar_extract/classes.jar app/libs/libv2ray.jar
+            echo "[OK] libv2ray.jar siap di app/libs/"
           fi
 
-          echo "===> Mengambil rules asset (geoip & geosite)..."
+          # Pindahkan folder lib (.so) ke jniLibs
+          if [ -d "/tmp/aar_extract/jni" ]; then
+            cp -r /tmp/aar_extract/jni/* app/src/main/jniLibs/
+          elif [ -d "/tmp/aar_extract/lib" ]; then
+            cp -r /tmp/aar_extract/lib/* app/src/main/jniLibs/
+          fi
+
+          echo "Mengunduh assets rules..."
           curl -L -o app/src/main/assets/geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
           curl -L -o app/src/main/assets/geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
 
-          echo "Isi folder app/libs:"
+          rm -rf /tmp/libv2ray.aar /tmp/aar_extract
+
+          echo "Daftar libs:"
           ls -la app/libs/
+          echo "Daftar jniLibs:"
+          ls -la app/src/main/jniLibs/
 
       - name: Grant Execute Permission
         run: chmod +x gradlew
