@@ -9,6 +9,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.net.URLDecoder
 import kotlin.concurrent.thread
 
@@ -16,6 +18,22 @@ object V2RayCoreUtils {
     private const val TAG = "V2RayCoreUtils"
     var activeController: Any? = null
     private var coreThread: Thread? = null
+
+    private fun writeCrashLog(context: Context, label: String, t: Throwable) {
+        try {
+            val sw = StringWriter()
+            t.printStackTrace(PrintWriter(sw))
+            val logText = "=== CRASH: $label ===\nPESAN: ${t.message}\nSTACKTRACE:\n$sw\n\n"
+            
+            // Tulis ke cache internal aplikasi
+            val internalLog = File(context.filesDir, "crash_log.txt")
+            internalLog.appendText(logText)
+
+            // Tulis ke /sdcard agar bisa dibaca langsung dari Termux / MT Manager
+            val sdcardLog = File("/sdcard/ddv2ray_crash.txt")
+            sdcardLog.appendText(logText)
+        } catch (_: Exception) {}
+    }
 
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
         val files = listOf("geoip.dat", "geosite.dat")
@@ -74,7 +92,6 @@ object V2RayCoreUtils {
                 })
 
                 val inbounds = JSONArray()
-                // SOCKS standar
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
                     put("port", 10808)
@@ -85,7 +102,6 @@ object V2RayCoreUtils {
                         put("udp", true)
                     })
                 })
-                // NATIVE TUN INBOUND UNTUK MENCEGAH CRASH
                 inbounds.put(JSONObject().apply {
                     put("tag", "tun-in")
                     put("protocol", "tun")
@@ -160,12 +176,18 @@ object V2RayCoreUtils {
         supportSetInstance: Any? = null,
         logCallback: ((String) -> Unit)? = null
     ): Boolean {
+        // Tangkap uncaught exception di seluruh thread JVM agar dicatat sebelum mati
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            writeCrashLog(context, "UncaughtException di Thread ${t.name}", e)
+            defaultHandler?.uncaughtException(t, e)
+        }
+
         try {
             copyAssetsIfNeeded(context, logCallback)
             val assetDir = context.filesDir.absolutePath
             val cacheDir = context.cacheDir.absolutePath
 
-            // MENULIS JSON KE FILE FISIK AGAR GO TIDAK PANIC
             val configFile = File(context.filesDir, "config.json")
             configFile.writeText(configJson)
             val configPath = configFile.absolutePath
@@ -194,8 +216,8 @@ object V2RayCoreUtils {
                         1 -> initEnv.invoke(null, assetDir)
                         else -> initEnv.invoke(null)
                     }
-                } catch (e: Exception) {
-                    logCallback?.invoke("[WARN] initCoreEnv: ${e.message}")
+                } catch (e: Throwable) {
+                    writeCrashLog(context, "initCoreEnv", e)
                 }
             }
 
@@ -207,8 +229,9 @@ object V2RayCoreUtils {
                     } else {
                         newControllerMethod.invoke(null)
                     }
-                } catch (_: Exception) {
-                    newControllerMethod.invoke(null, null)
+                } catch (e: Throwable) {
+                    writeCrashLog(context, "newCoreController", e)
+                    null
                 }
 
                 activeController = controller
@@ -218,40 +241,30 @@ object V2RayCoreUtils {
                     val startLoopMethod = ctrlClass.methods.firstOrNull { it.name.equals("startLoop", true) }
 
                     if (startLoopMethod != null) {
-                        logCallback?.invoke("[EXEC] Membaca file config dari: $configPath")
+                        logCallback?.invoke("[EXEC] Memulai loop core...")
                         val pTypes = startLoopMethod.parameterTypes
                         
                         coreThread = thread(start = true, name = "V2RayCoreThread", isDaemon = true) {
                             try {
                                 if (pTypes.size == 1) {
-                                    try {
-                                        // Coba lempar PATH FILE terlebih dahulu
-                                        startLoopMethod.invoke(controller, configPath)
-                                    } catch (e: Exception) {
-                                        // Fallback ke string JSON jika gagal
-                                        startLoopMethod.invoke(controller, configJson)
-                                    }
+                                    startLoopMethod.invoke(controller, configPath)
                                 } else if (pTypes.size == 2) {
-                                    try {
-                                        startLoopMethod.invoke(controller, configPath, tunFd)
-                                    } catch (e: Exception) {
-                                        startLoopMethod.invoke(controller, configJson, tunFd)
-                                    }
+                                    startLoopMethod.invoke(controller, configPath, tunFd)
                                 }
                             } catch (t: Throwable) {
-                                Log.e(TAG, "Native Crash di startLoop: ${t.message}", t)
+                                writeCrashLog(context, "startLoop invoke", t)
                             }
                         }
 
                         Thread.sleep(600)
-                        logCallback?.invoke("[CORE SUCCESS] Engine Controller siap!")
+                        logCallback?.invoke("[CORE SUCCESS] Engine aktif!")
                         return true
                     }
                 }
             }
             return false
         } catch (e: Throwable) {
-            Log.e(TAG, "startCore error", e)
+            writeCrashLog(context, "startCoreWithTun Root", e)
             return false
         }
     }
