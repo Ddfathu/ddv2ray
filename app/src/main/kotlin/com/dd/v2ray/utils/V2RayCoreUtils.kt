@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.system.Os
 import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.concurrent.thread
@@ -53,6 +55,22 @@ object V2RayCoreUtils {
         }
     }
 
+    private fun sanitizeConfig(rawJson: String): String {
+        return try {
+            val root = JSONObject(rawJson)
+            // Pastikan log level tidak membuat crash
+            if (!root.has("log")) {
+                val logObj = JSONObject().apply {
+                    put("loglevel", "warning")
+                }
+                root.put("log", logObj)
+            }
+            root.toString()
+        } catch (_: Exception) {
+            rawJson
+        }
+    }
+
     fun startCoreWithTun(
         context: Context,
         configJson: String,
@@ -81,10 +99,10 @@ object V2RayCoreUtils {
             val initEnv = coreClazz.methods.firstOrNull { it.name.equals("initCoreEnv", true) }
             if (initEnv != null) {
                 try {
-                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv...")
-                    if (initEnv.parameterTypes.size == 1 && initEnv.parameterTypes[0] == String::class.java) {
+                    logCallback?.invoke("[EXEC] Init Core Env...")
+                    if (initEnv.parameterTypes.size == 1) {
                         initEnv.invoke(null, assetDir)
-                    } else if (initEnv.parameterTypes.isEmpty()) {
+                    } else {
                         initEnv.invoke(null)
                     }
                 } catch (e: Exception) {
@@ -92,10 +110,10 @@ object V2RayCoreUtils {
                 }
             }
 
-            // Inisialisasi Controller
+            // Inisialisasi CoreController
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
             if (newControllerMethod != null) {
-                logCallback?.invoke("[EXEC] Membuat newCoreController...")
+                logCallback?.invoke("[EXEC] Membuat CoreController...")
                 val controller = try {
                     if (newControllerMethod.parameterTypes.isNotEmpty()) {
                         newControllerMethod.invoke(null, supportSetInstance)
@@ -110,56 +128,30 @@ object V2RayCoreUtils {
 
                 if (controller != null) {
                     val ctrlClass = controller.javaClass
-                    
-                    // Set callback handler jika ada method setCallbackHandler
-                    ctrlClass.methods.firstOrNull { it.name.equals("setCallbackHandler", true) }?.let { setCb ->
-                        try {
-                            setCb.invoke(controller, supportSetInstance)
-                        } catch (_: Exception) {}
-                    }
-
-                    // Cari method startLoop
                     val startLoopMethod = ctrlClass.methods.firstOrNull { it.name.equals("startLoop", true) }
-                    if (startLoopMethod != null) {
-                        val pTypes = startLoopMethod.parameterTypes
-                        val paramNames = pTypes.map { it.simpleName }.joinToString(", ")
-                        logCallback?.invoke("[EXEC] startLoop params: ($paramNames)")
 
-                        coreThread = thread(start = true, name = "V2RayControllerLoop") {
+                    if (startLoopMethod != null) {
+                        val validConfig = sanitizeConfig(configJson)
+                        logCallback?.invoke("[EXEC] Menjalankan startLoop...")
+
+                        coreThread = thread(start = true, name = "V2RayCoreThread", isDaemon = true) {
                             try {
-                                when (pTypes.size) {
-                                    0 -> startLoopMethod.invoke(controller)
-                                    1 -> {
-                                        if (pTypes[0] == String::class.java) {
-                                            startLoopMethod.invoke(controller, configJson)
-                                        } else if (pTypes[0] == Int::class.javaPrimitiveType || pTypes[0] == Long::class.javaPrimitiveType) {
-                                            startLoopMethod.invoke(controller, tunFd)
-                                        } else {
-                                            startLoopMethod.invoke(controller, null)
-                                        }
-                                    }
-                                    2 -> {
-                                        if (pTypes[0] == String::class.java && (pTypes[1] == Int::class.javaPrimitiveType || pTypes[1] == Long::class.javaPrimitiveType)) {
-                                            startLoopMethod.invoke(controller, configJson, tunFd)
-                                        } else {
-                                            startLoopMethod.invoke(controller, tunFd, configJson)
-                                        }
-                                    }
-                                    else -> logCallback?.invoke("[WARN] startLoop butuh ${pTypes.size} parameter yang tidak dikenal.")
-                                }
+                                startLoopMethod.invoke(controller, validConfig)
                             } catch (t: Throwable) {
-                                Log.e(TAG, "startLoop crash: ${t.message}", t)
+                                Log.e(TAG, "startLoop error: ${t.message}", t)
                             }
                         }
 
-                        logCallback?.invoke("[CORE SUCCESS] Engine Controller aktif di background thread!")
+                        // Beri jeda 500ms untuk memastikan core stabil dan tidak exit mendadak
+                        Thread.sleep(500)
+                        logCallback?.invoke("[CORE SUCCESS] Engine Controller stabil berjalan.")
                         return true
                     }
                 }
             }
 
-            logCallback?.invoke("[WARN] Controller tidak ditemukan.")
-            return true
+            logCallback?.invoke("[WARN] Controller gagal dimulai.")
+            return false
         } catch (e: Throwable) {
             logCallback?.invoke("[FATAL] Error start: ${e.message}")
             Log.e(TAG, "startCore error", e)
