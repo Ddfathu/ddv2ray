@@ -74,6 +74,7 @@ object V2RayCoreUtils {
                 })
 
                 val inbounds = JSONArray()
+                // SOCKS standar
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
                     put("port", 10808)
@@ -84,14 +85,12 @@ object V2RayCoreUtils {
                         put("udp", true)
                     })
                 })
+                // NATIVE TUN INBOUND UNTUK MENCEGAH CRASH
                 inbounds.put(JSONObject().apply {
                     put("tag", "tun-in")
-                    put("port", 0)
-                    put("listen", "127.0.0.1")
-                    put("protocol", "dokodemo-door")
+                    put("protocol", "tun")
                     put("settings", JSONObject().apply {
                         put("network", "tcp,udp")
-                        put("followRedirect", true)
                     })
                 })
                 root.put("inbounds", inbounds)
@@ -166,12 +165,18 @@ object V2RayCoreUtils {
             val assetDir = context.filesDir.absolutePath
             val cacheDir = context.cacheDir.absolutePath
 
+            // MENULIS JSON KE FILE FISIK AGAR GO TIDAK PANIC
+            val configFile = File(context.filesDir, "config.json")
+            configFile.writeText(configJson)
+            val configPath = configFile.absolutePath
+
             try {
                 System.setProperty("v2ray.location.asset", assetDir)
                 System.setProperty("xray.location.asset", assetDir)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     Os.setenv("V2RAY_LOCATION_ASSET", assetDir, true)
                     Os.setenv("XRAY_LOCATION_ASSET", assetDir, true)
+                    Os.setenv("xray.tun.fd", tunFd.toString(), true)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Setenv: ${e.message}")
@@ -179,12 +184,11 @@ object V2RayCoreUtils {
 
             val coreClazz = Class.forName("libv2ray.Libv2ray")
 
-            // Inisialisasi Environment dengan 2 parameter (assetDir, cacheDir)
             val initEnv = coreClazz.methods.firstOrNull { it.name.equals("initCoreEnv", true) }
             if (initEnv != null) {
                 try {
                     val pCount = initEnv.parameterTypes.size
-                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv (params: $pCount)...")
+                    logCallback?.invoke("[EXEC] Memanggil initCoreEnv...")
                     when (pCount) {
                         2 -> initEnv.invoke(null, assetDir, cacheDir)
                         1 -> initEnv.invoke(null, assetDir)
@@ -195,10 +199,8 @@ object V2RayCoreUtils {
                 }
             }
 
-            // Inisialisasi CoreController
             val newControllerMethod = coreClazz.methods.firstOrNull { it.name.equals("newCoreController", true) }
             if (newControllerMethod != null) {
-                logCallback?.invoke("[EXEC] Membuat CoreController...")
                 val controller = try {
                     if (newControllerMethod.parameterTypes.isNotEmpty()) {
                         newControllerMethod.invoke(null, supportSetInstance)
@@ -216,26 +218,39 @@ object V2RayCoreUtils {
                     val startLoopMethod = ctrlClass.methods.firstOrNull { it.name.equals("startLoop", true) }
 
                     if (startLoopMethod != null) {
-                        logCallback?.invoke("[EXEC] Menjalankan startLoop...")
+                        logCallback?.invoke("[EXEC] Membaca file config dari: $configPath")
+                        val pTypes = startLoopMethod.parameterTypes
+                        
                         coreThread = thread(start = true, name = "V2RayCoreThread", isDaemon = true) {
                             try {
-                                startLoopMethod.invoke(controller, configJson)
+                                if (pTypes.size == 1) {
+                                    try {
+                                        // Coba lempar PATH FILE terlebih dahulu
+                                        startLoopMethod.invoke(controller, configPath)
+                                    } catch (e: Exception) {
+                                        // Fallback ke string JSON jika gagal
+                                        startLoopMethod.invoke(controller, configJson)
+                                    }
+                                } else if (pTypes.size == 2) {
+                                    try {
+                                        startLoopMethod.invoke(controller, configPath, tunFd)
+                                    } catch (e: Exception) {
+                                        startLoopMethod.invoke(controller, configJson, tunFd)
+                                    }
+                                }
                             } catch (t: Throwable) {
-                                Log.e(TAG, "startLoop error: ${t.message}", t)
+                                Log.e(TAG, "Native Crash di startLoop: ${t.message}", t)
                             }
                         }
 
                         Thread.sleep(600)
-                        logCallback?.invoke("[CORE SUCCESS] Engine Controller berjalan aktif!")
+                        logCallback?.invoke("[CORE SUCCESS] Engine Controller siap!")
                         return true
                     }
                 }
             }
-
-            logCallback?.invoke("[WARN] Controller gagal dimulai.")
             return false
         } catch (e: Throwable) {
-            logCallback?.invoke("[FATAL] Error start: ${e.message}")
             Log.e(TAG, "startCore error", e)
             return false
         }
@@ -251,15 +266,9 @@ object V2RayCoreUtils {
                 stopMethod?.invoke(controller)
                 activeController = null
             }
-
-            try {
-                coreThread?.interrupt()
-            } catch (_: Exception) {}
+            try { coreThread?.interrupt() } catch (_: Exception) {}
             coreThread = null
-
             logCallback?.invoke("[CORE] Engine dihentikan.")
-        } catch (e: Exception) {
-            Log.w(TAG, "stopCore warning: ${e.message}")
-        }
+        } catch (e: Exception) {}
     }
 }
