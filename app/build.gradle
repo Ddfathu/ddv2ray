@@ -3,14 +3,6 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
-repositories {
-    google()
-    mavenCentral()
-    flatDir {
-        dirs 'libs'
-    }
-}
-
 android {
     namespace 'com.dd.v2ray'
     compileSdk 33
@@ -69,6 +61,6 @@ dependencies {
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
     implementation 'com.google.zxing:core:3.5.1'
 
-    // Core Native libv2ray
+    // Core Native libv2ray AAR
     implementation(name: 'libv2ray', ext: 'aar')
 }
