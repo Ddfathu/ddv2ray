@@ -47,11 +47,6 @@ class V2RayVpnService : VpnService() {
             builder.setSession("DDV2Ray")
             builder.setMtu(1500)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val pkgName: String = this.applicationContext.packageName.toString()
-                builder.addDisallowedApplication(pkgName)
-            }
-
             vpnInterface = builder.establish()
             Log.d("V2RayVpnService", "VPN Interface established successfully")
             true
