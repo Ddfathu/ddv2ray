@@ -27,7 +27,7 @@ object V2RayCoreUtils {
                     }
                     logCallback?.invoke("[ASSET] Berhasil salin $name")
                 } catch (e: Exception) {
-                    logCallback?.invoke("[WARN] Aset $name tidak ada di assets folder.")
+                    logCallback?.invoke("[WARN] Aset $name tidak ada di assets: ${e.message}")
                 }
             }
         }
@@ -63,11 +63,9 @@ object V2RayCoreUtils {
 
         val security = query["security"] ?: if (port == 443) "tls" else "none"
         val hostHeader = query["host"] ?: ""
-        
-        // Bug SNI Quipper: SNI mengarah ke host server bug (agar lolos kuota edukasi), Host header ke backend
         val sni = query["sni"]?.takeIf { it.isNotEmpty() } ?: host
 
-        return generateStandardV2RayJson("vless", host, port, uuid, network, path, security, sni, hostHeader)
+        return generateStandardXrayJson("vless", host, port, uuid, network, path, security, sni, hostHeader)
     }
 
     private fun parseVmess(url: String): String {
@@ -86,7 +84,7 @@ object V2RayCoreUtils {
         val hostHeader = json.optString("host", "")
         val sni = json.optString("sni", "").takeIf { it.isNotEmpty() } ?: host
 
-        return generateStandardV2RayJson("vmess", host, port, uuid, network, path, security, sni, hostHeader)
+        return generateStandardXrayJson("vmess", host, port, uuid, network, path, security, sni, hostHeader)
     }
 
     private fun parseTrojan(url: String): String {
@@ -106,11 +104,10 @@ object V2RayCoreUtils {
         val hostHeader = query["host"] ?: ""
         val sni = query["sni"]?.takeIf { it.isNotEmpty() } ?: host
 
-        return generateStandardV2RayJson("trojan", host, port, password, network, path, security, sni, hostHeader)
+        return generateStandardXrayJson("trojan", host, port, password, network, path, security, sni, hostHeader)
     }
 
-    // Format Konfigurasi Standar V2RayNG (Resmi)
-    private fun generateStandardV2RayJson(
+    private fun generateStandardXrayJson(
         protocol: String,
         host: String,
         port: Int,
@@ -123,7 +120,7 @@ object V2RayCoreUtils {
     ): String {
         val root = JSONObject()
 
-        // 1. Log
+        // 1. Log Config
         root.put("log", JSONObject().apply {
             put("loglevel", "warning")
         })
@@ -136,10 +133,10 @@ object V2RayCoreUtils {
             })
         })
 
-        // 3. Inbound Dokodemo-door untuk paket TUN
+        // 3. Inbounds: SOCKS Port 10808 (Pintu masuk koneksi lokal)
         val inbounds = JSONArray().apply {
             put(JSONObject().apply {
-                put("tag", "proxy")
+                put("tag", "socks-in")
                 put("port", 10808)
                 put("listen", "127.0.0.1")
                 put("protocol", "socks")
@@ -164,37 +161,39 @@ object V2RayCoreUtils {
             put("protocol", protocol)
 
             val userObj = JSONObject().apply {
-                put("id", authId)
-                if (protocol == "vless") put("encryption", "none")
-                if (protocol == "vmess") {
-                    put("alterId", 0)
-                    put("security", "auto")
+                if (protocol == "trojan") {
+                    put("password", authId)
+                } else {
+                    put("id", authId)
+                    if (protocol == "vless") put("encryption", "none")
+                    if (protocol == "vmess") {
+                        put("alterId", 0)
+                        put("security", "auto")
+                    }
+                }
+            }
+
+            val serverObj = JSONObject().apply {
+                put("address", host)
+                put("port", port)
+                if (protocol == "trojan") {
+                    put("password", authId)
+                } else {
+                    put("users", JSONArray().apply { put(userObj) })
                 }
             }
 
             if (protocol == "trojan") {
                 put("settings", JSONObject().apply {
-                    put("servers", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("address", host)
-                            put("port", port)
-                            put("password", authId)
-                        })
-                    })
+                    put("servers", JSONArray().apply { put(serverObj) })
                 })
             } else {
                 put("settings", JSONObject().apply {
-                    put("vnext", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("address", host)
-                            put("port", port)
-                            put("users", JSONArray().apply { put(userObj) })
-                        })
-                    })
+                    put("vnext", JSONArray().apply { put(serverObj) })
                 })
             }
 
-            // Stream Settings (Transport)
+            // Stream Transport Settings
             put("streamSettings", JSONObject().apply {
                 put("network", network)
 
@@ -217,7 +216,7 @@ object V2RayCoreUtils {
             })
         }
 
-        // Outbound Direct
+        // Outbound Freedom (Direct)
         val outboundDirect = JSONObject().apply {
             put("tag", "direct")
             put("protocol", "freedom")
@@ -258,37 +257,59 @@ object V2RayCoreUtils {
             copyAssetsIfNeeded(context, logCallback)
             val assetPath = context.filesDir.absolutePath
 
-            logCallback?.invoke("[CORE] Mencari kelas native libv2ray.Libv2ray...")
-            val libClazz = Class.forName("libv2ray.Libv2ray")
+            // 1. Simpan konfigurasi JSON resmi ke file lokal internal
+            val configFile = File(context.filesDir, "config.json")
+            configFile.writeText(configJson)
+            logCallback?.invoke("[CORE] File konfigurasi ditulis ke: ${configFile.name}")
 
-            try {
-                val initMethod = libClazz.getMethod("initV2Env", String::class.java)
-                initMethod.invoke(null, assetPath)
-                logCallback?.invoke("[CORE] Inisialisasi env aset berhasil.")
-            } catch (e: Exception) {
-                logCallback?.invoke("[CORE] initV2Env: ${e.message}")
+            logCallback?.invoke("[CORE] Menghubungkan ke kelas libXray.LibXray...")
+            val libClazz = Class.forName("libXray.LibXray")
+            val invokeMethod = libClazz.getMethod("invoke", String::class.java)
+
+            // 2. Format Request resmi untuk LibXray.invoke
+            val runRequest = JSONObject().apply {
+                put("name", "runXray")
+                put("data", JSONObject().apply {
+                    put("datDir", assetPath)
+                    put("configPath", configFile.absolutePath)
+                    put("maxMemory", 0)
+                })
             }
 
-            logCallback?.invoke("[CORE] Menjalankan startV2Ray dengan TUN FD: $tunFd...")
-            val startMethod = libClazz.getMethod("startV2Ray", String::class.java, Int::class.javaPrimitiveType)
-            startMethod.invoke(null, configJson, tunFd)
+            logCallback?.invoke("[CORE] Memulai proses RunXray...")
+            val rawResponse = invokeMethod.invoke(null, runRequest.toString()) as? String ?: ""
+            logCallback?.invoke("[CORE RES] $rawResponse")
 
-            logCallback?.invoke("[CORE] Mesin V2Ray Core berhasil berputar.")
-            true
+            val responseObj = JSONObject(rawResponse)
+            val success = responseObj.optBoolean("success", false)
+
+            if (success) {
+                logCallback?.invoke("[CORE] Mesin Xray AKTIF dan berjalan normal!")
+                true
+            } else {
+                val errorMsg = responseObj.optString("error", "Gagal memulai core")
+                logCallback?.invoke("[CORE ERROR] $errorMsg")
+                false
+            }
         } catch (e: ClassNotFoundException) {
-            logCallback?.invoke("[FATAL] libv2ray.aar tidak ditemukan di libs!")
+            logCallback?.invoke("[FATAL] libXray.LibXray tidak ditemukan di DEX: ${e.message}")
             false
         } catch (e: Exception) {
-            logCallback?.invoke("[FATAL] Gagal menyalakan core: ${e.message}")
+            logCallback?.invoke("[FATAL] Error eksekusi libXray: ${e.message}")
             false
         }
     }
 
     fun stopCore() {
         try {
-            val libClazz = Class.forName("libv2ray.Libv2ray")
-            val stopMethod = libClazz.getMethod("stopV2Ray")
-            stopMethod.invoke(null)
+            val libClazz = Class.forName("libXray.LibXray")
+            val invokeMethod = libClazz.getMethod("invoke", String::class.java)
+            val stopRequest = JSONObject().apply {
+                put("name", "stopXray")
+                put("data", JSONObject())
+            }
+            invokeMethod.invoke(null, stopRequest.toString())
+            Log.d(TAG, "libXray dihentikan.")
         } catch (_: Exception) {}
     }
 }
