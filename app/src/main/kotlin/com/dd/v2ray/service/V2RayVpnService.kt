@@ -14,6 +14,10 @@ import com.dd.v2ray.utils.V2RayCoreUtils
 
 class V2RayVpnService : VpnService() {
 
+    companion object {
+        private const val CHANNEL_ID = "DDV2Ray_VPN_Channel"
+    }
+
     private var vpnInterface: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -51,17 +55,18 @@ class V2RayVpnService : VpnService() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                "DDV2Ray_VPN_Channel",
+                CHANNEL_ID,
                 "DDV2Ray Service Channel",
                 NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(Context::NOTIFICATION_SERVICE) as? NotificationManager
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             manager?.createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this as Context, "DDV2Ray_VPN_Channel")
+        return NotificationCompat.Builder(this)
+            .setChannelId(CHANNEL_ID)
             .setContentTitle("DDV2Ray Connected")
             .setContentText("Layanan VPN aktif")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
@@ -78,7 +83,14 @@ class V2RayVpnService : VpnService() {
             Log.e("V2RayVpnService", "Error closing interface: ${e.message}")
         }
         vpnInterface = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+
         Log.d("V2RayVpnService", "V2Ray VPN Service Stopped")
     }
 }
