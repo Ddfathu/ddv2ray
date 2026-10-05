@@ -1,0 +1,40 @@
+name: Build DDV2Ray APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Java JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Grant Execute Permission for Gradle
+      run: |
+        if [ -f "./gradlew" ]; then
+          chmod +x gradlew
+        fi
+
+    - name: Build APK with Gradle
+      run: |
+        if [ -f "./gradlew" ]; then
+          ./gradlew assembleDebug
+        else
+          gradle assembleDebug
+        fi
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: DDV2Ray-arm64-debug
+        path: app/build/outputs/apk/debug/*.apk
