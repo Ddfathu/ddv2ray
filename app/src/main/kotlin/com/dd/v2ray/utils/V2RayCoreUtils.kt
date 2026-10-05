@@ -3,7 +3,6 @@ package com.dd.v2ray.utils
 import android.content.Context
 import android.os.Build
 import android.system.Os
-import android.util.Base64
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,30 +44,21 @@ object V2RayCoreUtils {
                 3L
             }
 
-            val payload = JSONObject().apply {
+            val payloadObj = JSONObject().apply {
                 put("text", shareUrl.trim())
             }
-
-            val rawBytes = payload.toString().toByteArray(Charsets.UTF_8)
-            val base64Data = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
 
             val invokeRequest = JSONObject().apply {
                 put("apiVersion", apiVersion)
                 put("name", "ConvertShareLinksToXrayJson")
-                put("data", base64Data)
+                put("data", payloadObj)
             }
 
             val responseStr = invokeMethod.invoke(null, invokeRequest.toString()) as? String ?: ""
             val resObj = JSONObject(responseStr)
 
             if (resObj.optBoolean("success", false)) {
-                val dataStr = resObj.optString("data", "")
-                try {
-                    val decodedBytes = Base64.decode(dataStr, Base64.DEFAULT)
-                    String(decodedBytes, Charsets.UTF_8)
-                } catch (_: Exception) {
-                    dataStr
-                }
+                resObj.optString("data", "{}")
             } else {
                 Log.e(TAG, "Gagal konversi share link: ${resObj.optString("error")}")
                 "{}"
@@ -133,7 +123,7 @@ object V2RayCoreUtils {
             root.put("inbounds", inbounds)
             root.toString()
         } catch (e: Exception) {
-            Log.w(TAG, "Injeksi gagal, memakai config asli: ${e.message}")
+            Log.w(TAG, "Injeksi gagal: ${e.message}")
             rawConfigJson
         }
     }
@@ -172,20 +162,16 @@ object V2RayCoreUtils {
 
             val invokeMethod = libClazz.getMethod("invoke", String::class.java)
 
-            // Sub-payload RunXrayRequest
+            // Sub-payload RunXrayRequest: { "xrayJson": "..." }
             val runPayload = JSONObject().apply {
                 put("xrayJson", preparedConfig)
             }
 
-            // Encode payload ke Base64 (Go Data []uint8)
-            val rawPayloadBytes = runPayload.toString().toByteArray(Charsets.UTF_8)
-            val base64Data = Base64.encodeToString(rawPayloadBytes, Base64.NO_WRAP)
-
-            // Envelope invoke
+            // Envelope request dikirim langsung sebagai JSONObject mentah agar decodePayload di Go berhasil
             val invokeRequest = JSONObject().apply {
                 put("apiVersion", apiVersion)
                 put("name", "RunXray")
-                put("data", base64Data)
+                put("data", runPayload)
             }
 
             logCallback?.invoke("[CORE] Menjalankan RunXray via invoke...")
