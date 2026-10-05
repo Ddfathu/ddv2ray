@@ -20,9 +20,6 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Download & Extract v2rayNG Core Library (AAR / Native SO)
         run: |
           mkdir -p app/libs
@@ -31,7 +28,7 @@ jobs:
 
           echo "===> Mengambil AAR/Assets terbaru dari 2dust/v2rayNG..."
           
-          # Unduh APK rilis terbaru v2rayNG untuk mengekstrak binary so dan dat yang 100% kompatibel
+          # Unduh APK rilis terbaru v2rayNG untuk mengekstrak binary .so dan .dat
           LATEST_URL=$(curl -s https://api.github.com/repos/2dust/v2rayNG/releases/latest | grep "browser_download_url.*universal.apk" | cut -d '"' -f 4 | head -n 1)
           if [ -z "$LATEST_URL" ]; then
             LATEST_URL=$(curl -s https://api.github.com/repos/2dust/v2rayNG/releases/latest | grep "browser_download_url.*apk" | cut -d '"' -f 4 | head -n 1)
@@ -40,7 +37,7 @@ jobs:
           echo "Downloading from: $LATEST_URL"
           curl -L -o v2rayng.apk "$LATEST_URL"
 
-          # Ekstrak jniLibs (libgojni.so / libv2ray.so)
+          # Ekstrak jniLibs (.so)
           unzip -q v2rayng.apk -d v2ray_temp
           
           if [ -d "v2ray_temp/lib" ]; then
@@ -49,15 +46,15 @@ jobs:
             ls -la app/src/main/jniLibs/
           fi
 
-          # Ekstrak asset geoip.dat & geosite.dat
+          # Ekstrak file aset rule (geoip.dat & geosite.dat)
           if [ -f "v2ray_temp/assets/geoip.dat" ]; then
             cp v2ray_temp/assets/geoip.dat app/src/main/assets/
             cp v2ray_temp/assets/geosite.dat app/src/main/assets/
-            echo "[OK] Berhasil mengekstrak geoip.dat dan geosite.dat"
+            echo "[OK] Berhasil mengekstrak geoip.dat dan geosite.dat dari APK"
           else
-            # Fallback jika aset disimpan di root binary
             curl -L -o app/src/main/assets/geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
             curl -L -o app/src/main/assets/geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+            echo "[OK] Berhasil mengunduh geoip.dat dan geosite.dat fallback"
           fi
 
           rm -rf v2ray_temp v2rayng.apk
