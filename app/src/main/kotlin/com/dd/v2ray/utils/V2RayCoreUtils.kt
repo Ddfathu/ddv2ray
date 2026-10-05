@@ -12,10 +12,8 @@ import java.lang.reflect.Method
 
 object V2RayCoreUtils {
     private const val TAG = "V2RayCoreUtils"
+    var v2rayPointInstance: Any? = null
 
-    /**
-     * Memastikan file geoip.dat dan geosite.dat disalin ke storage internal app.
-     */
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
         val files = listOf("geoip.dat", "geosite.dat")
         for (fileName in files) {
@@ -37,21 +35,17 @@ object V2RayCoreUtils {
         }
     }
 
-    /**
-     * Parsing share link sederhana ala v2rayNG jika URL belum berwujud JSON.
-     */
     fun parseUrlToJson(shareUrl: String): String {
         val trimmed = shareUrl.trim()
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             return trimmed
         }
-        // Fallback panggil method parser bawaan lib jika ada
         return try {
-            val libClazz = findCoreClass()
-            val method = libClazz.methods.firstOrNull { 
+            val coreClazz = Class.forName("libv2ray.Libv2ray")
+            val method = coreClazz.methods.firstOrNull { 
                 it.name.contains("convert", ignoreCase = true) || it.name.contains("parse", ignoreCase = true) 
             }
-            if (method != null) {
+            if (method != null && method.parameterTypes.isNotEmpty() && method.parameterTypes[0] == String::class.java) {
                 method.invoke(null, trimmed) as? String ?: "{}"
             } else {
                 "{}"
@@ -62,9 +56,6 @@ object V2RayCoreUtils {
         }
     }
 
-    /**
-     * Menyiapkan Inbound Dokodemo-door (Port 0 / TUN) & Socks lokal port 10808 ala v2rayNG.
-     */
     fun prepareConfigForTun(rawConfigJson: String): String {
         return try {
             val root = JSONObject(rawConfigJson)
@@ -124,37 +115,17 @@ object V2RayCoreUtils {
         }
     }
 
-    /**
-     * Mencari class core (libv2ray atau libXray).
-     */
-    private fun findCoreClass(): Class<*> {
-        val candidates = listOf(
-            "libv2ray.Libv2ray",
-            "libXray.LibXray",
-            "com.v2ray.ang.Libv2ray"
-        )
-        for (name in candidates) {
-            try {
-                return Class.forName(name)
-            } catch (_: ClassNotFoundException) {}
-        }
-        throw ClassNotFoundException("Tidak ditemukan class Libv2ray maupun LibXray")
-    }
-
-    /**
-     * Menjalankan Core engine langsung tanpa invoke JSON envelope yang bikin pusing.
-     */
     fun startCoreWithTun(
         context: Context,
         configJson: String,
         tunFd: Int,
+        supportSetInstance: Any?,
         logCallback: ((String) -> Unit)? = null
     ): Boolean {
         return try {
             copyAssetsIfNeeded(context, logCallback)
             val assetDir = context.filesDir.absolutePath
 
-            // 1. Set environment direktori aset DAT
             try {
                 System.setProperty("v2ray.location.asset", assetDir)
                 System.setProperty("xray.location.asset", assetDir)
@@ -166,70 +137,136 @@ object V2RayCoreUtils {
                 Log.w(TAG, "Setenv warning: ${e.message}")
             }
 
-            val coreClazz = findCoreClass()
-            logCallback?.invoke("[CORE] Memakai core engine: ${coreClazz.name}")
+            val coreClazz = Class.forName("libv2ray.Libv2ray")
+            logCallback?.invoke("[CORE] Class: ${coreClazz.name}")
 
-            // Inisialisasi Environment Core ala v2rayNG (initV2Env / initEnv)
-            val initMethod = coreClazz.methods.firstOrNull { 
-                it.name.equals("initV2Env", ignoreCase = true) || it.name.equals("initEnv", ignoreCase = true) 
+            val allMethods = coreClazz.methods.map { it.name }.distinct()
+            val relevantMethods = allMethods.filter {
+                it.contains("start", true) || it.contains("init", true) || 
+                it.contains("run", true) || it.contains("point", true)
             }
-            if (initMethod != null) {
-                logCallback?.invoke("[CORE] Menjalankan ${initMethod.name}(assets)...")
-                initMethod.invoke(null, assetDir)
+            logCallback?.invoke("[METHODS] ${relevantMethods.joinToString(", ")}")
+
+            // Inisialisasi Environment Libv2ray
+            coreClazz.methods.firstOrNull { it.name.startsWith("init", true) }?.let { initM ->
+                try {
+                    logCallback?.invoke("[CORE] Menjalankan ${initM.name}...")
+                    if (initM.parameterTypes.size == 1 && initM.parameterTypes[0] == String::class.java) {
+                        initM.invoke(null, assetDir)
+                    } else if (initM.parameterTypes.isEmpty()) {
+                        initM.invoke(null)
+                    }
+                } catch (e: Exception) {
+                    logCallback?.invoke("[WARN] Init: ${e.message}")
+                }
             }
 
             val finalConfig = prepareConfigForTun(configJson)
 
-            // Cari method start langsung: startV2Ray, startXray, atau run
-            val startMethod: Method? = coreClazz.methods.firstOrNull { m ->
-                val name = m.name.lowercase()
-                (name.contains("start") || name.contains("run")) &&
-                        !name.contains("request") &&
-                        m.parameterTypes.isNotEmpty() &&
-                        m.parameterTypes[0] == String::class.java
+            // Jalur 1: Pola V2RayPoint khas v2rayNG
+            val newPointMethod = coreClazz.methods.firstOrNull { it.name.equals("newV2RayPoint", ignoreCase = true) }
+            if (newPointMethod != null && supportSetInstance != null) {
+                logCallback?.invoke("[EXEC] Membuat V2RayPoint...")
+                val point = if (newPointMethod.parameterTypes.size == 2) {
+                    newPointMethod.invoke(null, supportSetInstance, false)
+                } else {
+                    newPointMethod.invoke(null, supportSetInstance)
+                }
+                v2rayPointInstance = point
+
+                if (point != null) {
+                    // Masukkan konfigurasi JSON
+                    val setConfigMethod = point.javaClass.methods.firstOrNull { 
+                        it.name.contains("config", ignoreCase = true) && 
+                        it.parameterTypes.isNotEmpty() && 
+                        it.parameterTypes[0] == String::class.java 
+                    }
+
+                    if (setConfigMethod != null) {
+                        setConfigMethod.invoke(point, finalConfig)
+                    } else {
+                        val field = point.javaClass.declaredFields.firstOrNull { 
+                            it.name.contains("config", ignoreCase = true) 
+                        }
+                        field?.isAccessible = true
+                        field?.set(point, finalConfig)
+                    }
+
+                    // Jalankan Core (runLoop / start)
+                    val runMethod = point.javaClass.methods.firstOrNull { 
+                        it.name.equals("runLoop", ignoreCase = true) || it.name.startsWith("start", ignoreCase = true) 
+                    }
+
+                    if (runMethod != null) {
+                        logCallback?.invoke("[EXEC] Menjalankan ${runMethod.name} pada V2RayPoint...")
+                        Thread {
+                            try {
+                                if (runMethod.parameterTypes.isEmpty()) {
+                                    runMethod.invoke(point)
+                                } else if (runMethod.parameterTypes.size == 1 && runMethod.parameterTypes[0] == Boolean::class.javaPrimitiveType) {
+                                    runMethod.invoke(point, false)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "RunLoop exit: ${e.message}")
+                            }
+                        }.start()
+                        logCallback?.invoke("[CORE] Engine V2RayPoint BERJALAN!")
+                        return true
+                    }
+                }
             }
 
-            if (startMethod != null) {
-                logCallback?.invoke("[CORE] Menjalankan via method ${startMethod.name}...")
-                val res = startMethod.invoke(null, finalConfig)
-                logCallback?.invoke("[CORE] Output: $res")
+            // Jalur 2: Direct Start Method jika tersedia (startV2Ray)
+            val targetStart: Method? = coreClazz.methods.firstOrNull { m ->
+                val n = m.name.lowercase()
+                (n.startsWith("start") || n.startsWith("run")) && !n.contains("request")
+            }
+
+            if (targetStart != null) {
+                logCallback?.invoke("[EXEC] Menjalankan ${targetStart.name}...")
+                val params = targetStart.parameterTypes
+                val result = when (params.size) {
+                    0 -> targetStart.invoke(null)
+                    1 -> {
+                        if (params[0] == String::class.java) targetStart.invoke(null, finalConfig)
+                        else targetStart.invoke(null, null)
+                    }
+                    else -> null
+                }
+                logCallback?.invoke("[CORE SUCCESS] Hasil: $result")
                 true
             } else {
-                // Jika library Anda mewajibkan parameter invoke datar:
-                logCallback?.invoke("[CORE] Menjalankan via direct invoke(config)...")
-                val invokeMethod = coreClazz.getMethod("invoke", String::class.java)
-                val directReq = JSONObject().apply {
-                    put("name", "RunXray")
-                    put("xrayJson", finalConfig)
-                    put("datDir", assetDir)
-                }
-                val rawRes = invokeMethod.invoke(null, directReq.toString()) as? String ?: ""
-                logCallback?.invoke("[CORE RES] $rawRes")
-                !rawRes.contains("\"success\":false")
+                logCallback?.invoke("[ERROR] Tidak menemukan launcher start yang cocok!")
+                false
             }
         } catch (e: Exception) {
-            logCallback?.invoke("[FATAL] Gagal start core: ${e.message}")
+            logCallback?.invoke("[FATAL] Error start: ${e.message}")
             Log.e(TAG, "startCore error", e)
             false
         }
     }
 
-    /**
-     * Menghentikan Core engine.
-     */
     fun stopCore(logCallback: ((String) -> Unit)? = null) {
         try {
-            val coreClazz = findCoreClass()
+            val point = v2rayPointInstance
+            if (point != null) {
+                val stopMethod = point.javaClass.methods.firstOrNull { 
+                    val n = it.name.lowercase()
+                    n.contains("stop") || n.contains("close") 
+                }
+                stopMethod?.invoke(point)
+                v2rayPointInstance = null
+                logCallback?.invoke("[CORE] V2RayPoint dihentikan.")
+                return
+            }
+
+            val coreClazz = Class.forName("libv2ray.Libv2ray")
             val stopMethod = coreClazz.methods.firstOrNull { 
                 val n = it.name.lowercase()
                 n.contains("stop") || n.contains("close") 
             }
-            if (stopMethod != null) {
-                stopMethod.invoke(null)
-                logCallback?.invoke("[CORE] Engine dihentikan via ${stopMethod.name}.")
-            } else {
-                logCallback?.invoke("[CORE] Core dilepas.")
-            }
+            stopMethod?.invoke(null)
+            logCallback?.invoke("[CORE] Engine dihentikan.")
         } catch (e: Exception) {
             Log.w(TAG, "stopCore warning: ${e.message}")
         }

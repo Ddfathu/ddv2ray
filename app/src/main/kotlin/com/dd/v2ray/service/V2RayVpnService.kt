@@ -38,6 +38,7 @@ class V2RayVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+    private var v2raySupportInstance: Any? = null
 
     private fun log(msg: String) {
         Log.d(TAG, msg)
@@ -72,10 +73,10 @@ class V2RayVpnService : VpnService() {
 
         serviceScope.launch {
             try {
-                // 1. Daftarkan socket protect ala v2rayNG
-                registerSocketProtector()
+                // 1. Buat Support Set Interface khas v2rayNG
+                v2raySupportInstance = createV2RaySupportInstance()
 
-                // 2. Setup TUN Interface
+                // 2. Setup Interface TUN Android
                 val builder = Builder()
                 builder.setSession("DDV2Ray")
                 builder.setMtu(1500)
@@ -87,7 +88,7 @@ class V2RayVpnService : VpnService() {
                 val myPkg = applicationContext.packageName
                 try {
                     builder.addDisallowedApplication(myPkg)
-                    log("[2/4] Package $myPkg di-bypass dari rute TUN.")
+                    log("[2/4] Package $myPkg di-bypass dari TUN.")
                 } catch (e: Exception) {
                     log("[WARN] Bypass package: ${e.message}")
                 }
@@ -97,18 +98,19 @@ class V2RayVpnService : VpnService() {
 
                 if (pfd != null) {
                     val fd = pfd.fd
-                    log("[3/4] TUN Aktif (FD: $fd). Menjalankan core...")
+                    log("[3/4] TUN Aktif (FD: $fd). Memulai engine core...")
 
                     val success = V2RayCoreUtils.startCoreWithTun(
                         context = applicationContext,
                         configJson = configJson,
                         tunFd = fd,
+                        supportSetInstance = v2raySupportInstance,
                         logCallback = { coreMsg -> log(coreMsg) }
                     )
 
                     if (success) {
                         isRunning = true
-                        log("[4/4] CONNECTED! Core Xray/V2Ray aktif.")
+                        log("[4/4] CONNECTED! Core v2rayNG aktif.")
                     } else {
                         log("[ERROR] Engine gagal distart!")
                         stopVpn()
@@ -125,47 +127,39 @@ class V2RayVpnService : VpnService() {
         }
     }
 
-    private fun registerSocketProtector() {
-        try {
-            val candidates = listOf(
-                "libv2ray.Libv2ray" to "libv2ray.V2RayVPNServiceSupportsSet",
-                "libXray.LibXray" to "libXray.DialerController"
-            )
+    private fun createV2RaySupportInstance(): Any? {
+        val candidates = listOf(
+            "libv2ray.V2RayVPNServiceSupportsSet",
+            "libv2ray.V2RayVPNServiceSupports",
+            "libXray.DialerController"
+        )
 
-            for ((coreClassName, interfaceName) in candidates) {
-                try {
-                    val coreClazz = Class.forName(coreClassName)
-                    val ifaceClazz = Class.forName(interfaceName)
-
-                    val proxyInstance = Proxy.newProxyInstance(
-                        ifaceClazz.classLoader,
-                        arrayOf(ifaceClazz)
-                    ) { _, method, args ->
-                        val name = method.name.lowercase()
-                        if (name.contains("protect") || name.contains("dial")) {
+        for (ifaceName in candidates) {
+            try {
+                val ifaceClazz = Class.forName(ifaceName)
+                val proxy = Proxy.newProxyInstance(
+                    ifaceClazz.classLoader,
+                    arrayOf(ifaceClazz)
+                ) { _, method, args ->
+                    val mName = method.name.lowercase()
+                    when {
+                        mName.contains("setup") -> 0L
+                        mName.contains("prepare") -> 0L
+                        mName.contains("protect") || mName.contains("dial") -> {
                             val fd = (args?.get(0) as? Number)?.toInt() ?: 0
                             if (fd > 0) this@V2RayVpnService.protect(fd) else true
-                        } else {
-                            null
                         }
+                        mName.contains("onemitstatus") -> 0L
+                        method.returnType == Long::class.javaPrimitiveType -> 0L
+                        method.returnType == Boolean::class.javaPrimitiveType -> true
+                        else -> null
                     }
-
-                    val regMethod = coreClazz.methods.firstOrNull { 
-                        it.name.contains("register", ignoreCase = true) && 
-                        it.parameterTypes.isNotEmpty() && 
-                        it.parameterTypes[0].isAssignableFrom(ifaceClazz)
-                    }
-
-                    if (regMethod != null) {
-                        regMethod.invoke(null, proxyInstance)
-                        log("[CORE] Socket Protect Controller terdaftar.")
-                        break
-                    }
-                } catch (_: Exception) {}
-            }
-        } catch (e: Exception) {
-            log("[WARN] Socket protector skipped: ${e.message}")
+                }
+                log("[SUPPORT] Terdaftar proxy untuk interface $ifaceName")
+                return proxy
+            } catch (_: ClassNotFoundException) {}
         }
+        return null
     }
 
     private fun stopVpn() {
