@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-exec gradle "$@"
+exec java -jar "$0/../gradle/wrapper/gradle-wrapper.jar" "$@"
