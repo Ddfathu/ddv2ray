@@ -24,9 +24,23 @@ class V2RayVpnService : VpnService() {
         createNotificationChannel()
         startForeground(1, createNotification())
 
-        // Bagian Core & TUN disiapin buat tahap berikutnya
-        if (configJson.isNotEmpty()) {
-            Log.d("V2RayVpnService", "Config received: length ${configJson.length}")
+        // Kita inisialisasi langsung tanpa fungsi Builder terpisah yang rawan error
+        try {
+            val builder = VpnService.Builder(this)
+            builder.addAddress("10.0.0.2", 24)
+            builder.addRoute("0.0.0.0", 0)
+            builder.addDnsServer("1.1.1.1")
+            builder.setSession("DDV2Ray")
+            builder.setMtu(1500)
+            
+            vpnInterface = builder.establish()
+            val pfd = vpnInterface
+            if (pfd != null && configJson.isNotEmpty()) {
+                val fd = pfd.detachFd()
+                V2RayCoreUtils.startCoreWithTun(this, configJson, fd)
+            }
+        } catch (e: Exception) {
+            Log.e("V2RayVpnService", "Error in VPN setup: ${e.message}")
         }
 
         return START_STICKY
