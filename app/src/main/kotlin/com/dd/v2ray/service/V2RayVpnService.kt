@@ -23,37 +23,34 @@ class V2RayVpnService : VpnService() {
 
         const val ACTION_START = "com.dd.v2ray.START"
         const val ACTION_STOP = "com.dd.v2ray.STOP"
-        const val ACTION_DEBUG_LOG = "com.dd.v2ray.DEBUG_LOG"
         const val EXTRA_CONFIG = "CONFIG_JSON"
-        const val EXTRA_LOG_MSG = "DEBUG_MSG"
 
         var isRunning: Boolean = false
             private set
+
+        // Callback langsung ke UI agar log tidak buta
+        var onLogReceived: ((String) -> Unit)? = null
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
 
-    private fun sendDebug(msg: String) {
+    private fun log(msg: String) {
         Log.d(TAG, msg)
-        val intent = Intent(ACTION_DEBUG_LOG).apply {
-            putExtra(EXTRA_LOG_MSG, msg)
-            setPackage(packageName)
-        }
-        sendBroadcast(intent)
+        onLogReceived?.invoke(msg)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
 
         if (action == ACTION_STOP) {
-            sendDebug("[VPN] Menghentikan VPN Service...")
+            log("[VPN] Menghentikan VPN dan memulihkan jaringan...")
             stopVpn()
             return START_NOT_STICKY
         }
 
         val configJson = intent?.getStringExtra(EXTRA_CONFIG) ?: ""
         if (configJson.isEmpty()) {
-            sendDebug("[ERROR] Config JSON kosong!")
+            log("[ERROR] Konfigurasi kosong!")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -63,71 +60,57 @@ class V2RayVpnService : VpnService() {
     }
 
     private fun startVpn(configJson: String) {
-        sendDebug("[VPN] Menyiapkan Antarmuka TUN...")
+        log("[1/4] Membangun Virtual TUN Interface...")
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
 
         try {
             val builder = Builder()
+            builder.setSession("DDV2Ray")
+            builder.setMtu(1500)
+            builder.addAddress("172.19.0.1", 30)
 
-            // Alokasi virtual gateway lokal
-            builder.addAddress("26.26.26.1", 24)
-
-            // Rute default traffic global
-            builder.addRoute("0.0.0.0", 0)
-
-            // DNS Resolvers
+            // DNS
             builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("8.8.8.8")
 
-            // Rute eksplisit DNS agar tidak blackhole
-            try {
-                builder.addRoute("1.1.1.1", 32)
-                builder.addRoute("8.8.8.8", 32)
-            } catch (e: Exception) {
-                sendDebug("[WARN] Route DNS route: ${e.message}")
-            }
+            // Seluruh rute internet diarahkan ke TUN
+            builder.addRoute("0.0.0.0", 0)
 
-            // Hindari infinite loop aplikasi sendiri
+            // Bypass aplikasi sendiri agar core V2Ray bisa tembus keluar
             try {
                 builder.addDisallowedApplication(packageName)
-                sendDebug("[VPN] Exclude package berhasil: $packageName")
+                log("[2/4] Aplikasi sendiri di-bypass dari TUN.")
             } catch (e: Exception) {
-                sendDebug("[WARN] Gagal bypass package: ${e.message}")
+                log("[WARN] Bypass package gagal: ${e.message}")
             }
-
-            builder.setSession("DDV2Ray")
-            builder.setMtu(1500)
-            
-            // Menggunakan blocking read untuk kompatibilitas tun2socks Linux/Go
-            builder.setBlocking(true)
 
             vpnInterface = builder.establish()
             val pfd = vpnInterface
 
             if (pfd != null) {
-                val fd = pfd.detachFd()
-                sendDebug("[VPN] TUN Terhubung (FD: $fd). Memulai Core V2Ray...")
+                val fd = pfd.fd
+                log("[3/4] TUN Aktif dengan FD: $fd. Mengoper ke Core Native...")
 
-                val success = V2RayCoreUtils.startCoreWithTun(this, configJson, fd) { coreLog ->
-                    sendDebug("[CORE] $coreLog")
+                val success = V2RayCoreUtils.startCoreWithTun(this, configJson, fd) { coreMsg ->
+                    log(coreMsg)
                 }
 
                 if (success) {
                     isRunning = true
-                    sendDebug("[SUCCESS] Terowongan VPN & Core aktif!")
+                    log("[4/4] CONNECTED! Jaringan aktif mengalir ke V2Ray.")
                 } else {
-                    sendDebug("[ERROR] Inisialisasi Core gagal.")
+                    log("[ERROR] Native Core gagal dijalankan!")
                     stopVpn()
                 }
             } else {
-                sendDebug("[ERROR] Interface TUN null (Izin ditolak/bentrok).")
+                log("[ERROR] builder.establish() NULL! Akses ditolak sistem.")
                 stopVpn()
             }
 
         } catch (e: Exception) {
-            sendDebug("[FATAL] VPN Setup Error: ${e.message}")
+            log("[FATAL] Gagal membuat VPN: ${e.message}")
             stopVpn()
         }
     }
@@ -139,7 +122,7 @@ class V2RayVpnService : VpnService() {
         try {
             vpnInterface?.close()
         } catch (e: Exception) {
-            sendDebug("[WARN] Gagal menutup interface: ${e.message}")
+            log("[WARN] Error tutup vpnInterface: ${e.message}")
         }
         vpnInterface = null
 
@@ -151,7 +134,7 @@ class V2RayVpnService : VpnService() {
         }
 
         stopSelf()
-        sendDebug("[VPN] Service berhasil dihentikan.")
+        log("[SELESAI] VPN mati total. Koneksi internet kembali ke jaringan normal.")
     }
 
     override fun protect(socket: Int): Boolean {
@@ -164,9 +147,7 @@ class V2RayVpnService : VpnService() {
                 CHANNEL_ID,
                 "DDV2Ray Service Channel",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                setShowBadge(false)
-            }
+            ).apply { setShowBadge(false) }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             manager?.createNotificationChannel(channel)
         }
@@ -181,9 +162,7 @@ class V2RayVpnService : VpnService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = Intent(this, V2RayVpnService::class.java).apply {
-            action = ACTION_STOP
-        }
+        val stopIntent = Intent(this, V2RayVpnService::class.java).apply { action = ACTION_STOP }
         val stopPendingIntent = PendingIntent.getService(
             this,
             1,
@@ -193,8 +172,8 @@ class V2RayVpnService : VpnService() {
 
         return NotificationCompat.Builder(this)
             .setChannelId(CHANNEL_ID)
-            .setContentTitle("DDV2Ray Terhubung")
-            .setContentText("Internet dialirkan lewat V2Ray")
+            .setContentTitle("DDV2Ray Aktif")
+            .setContentText("Terhubung ke server V2Ray")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Putuskan", stopPendingIntent)
@@ -209,7 +188,6 @@ class V2RayVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        sendDebug("[VPN] Hak akses dicabut pengguna.")
         stopVpn()
         super.onRevoke()
     }

@@ -7,8 +7,11 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.VpnService
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,6 +20,9 @@ import com.dd.v2ray.service.V2RayVpnService
 import com.dd.v2ray.utils.V2RayCoreUtils
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -26,9 +32,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPaste: Button
     private lateinit var btnScan: Button
     private lateinit var btnToggleVpn: Button
+    private lateinit var tvDebugLog: TextView
+    private lateinit var scrollDebug: ScrollView
+    private lateinit var btnClearLog: Button
 
-    private var isVpnRunning = false
     private var currentConfigJson: String = ""
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val barcodeLauncher = registerForActivityResult(ScanContract()) { result ->
         if (result.contents != null) {
@@ -42,8 +51,10 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            startVpnService()
+            appendLog("[PERM] Izin diberikan oleh pengguna.")
+            executeStartService()
         } else {
+            appendLog("[ERROR] Izin VPN ditolak!")
             Toast.makeText(this, "Izin VPN ditolak!", Toast.LENGTH_SHORT).show()
         }
     }
@@ -58,8 +69,21 @@ class MainActivity : AppCompatActivity() {
         btnPaste = findViewById(R.id.btnPaste)
         btnScan = findViewById(R.id.btnScan)
         btnToggleVpn = findViewById(R.id.btnToggleVpn)
+        tvDebugLog = findViewById(R.id.tvDebugLog)
+        scrollDebug = findViewById(R.id.scrollDebug)
+        btnClearLog = findViewById(R.id.btnClearLog)
 
-        // 1. Ambil teks dari clipboard
+        // Hubungkan log callback langsung tanpa broadcast
+        V2RayVpnService.onLogReceived = { msg ->
+            mainHandler.post {
+                appendLog(msg)
+            }
+        }
+
+        btnClearLog.setOnClickListener {
+            tvDebugLog.text = ""
+        }
+
         btnPaste.setOnClickListener {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clipData = clipboard.primaryClip
@@ -68,27 +92,21 @@ class MainActivity : AppCompatActivity() {
                 if (pasted.isNotEmpty()) {
                     etConfigUrl.setText(pasted)
                     processAndLoadConfig(pasted)
-                } else {
-                    Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show()
                 }
-            } else {
-                Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show()
             }
         }
 
-        // 2. Scan QR Code
         btnScan.setOnClickListener {
             val options = ScanOptions().apply {
                 setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                setPrompt("Arahkan kamera ke QR Code V2Ray")
+                setPrompt("Scan QR Code V2Ray")
                 setBeepEnabled(true)
             }
             barcodeLauncher.launch(options)
         }
 
-        // 3. Tombol Connect / Disconnect
         btnToggleVpn.setOnClickListener {
-            if (isVpnRunning) {
+            if (V2RayVpnService.isRunning) {
                 stopVpnService()
             } else {
                 val inputUrl = etConfigUrl.text.toString().trim()
@@ -97,7 +115,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (currentConfigJson.isEmpty()) {
-                    Toast.makeText(this, "Pilih atau paste config terlebih dahulu!", Toast.LENGTH_SHORT).show()
+                    appendLog("[ERROR] Masukkan URL valid terlebih dahulu!")
+                    Toast.makeText(this, "Config kosong!", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
 
@@ -106,43 +125,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun appendLog(text: String) {
+        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        tvDebugLog.append("[$time] $text\n")
+        scrollDebug.post {
+            scrollDebug.fullScroll(ScrollView.FOCUS_DOWN)
+        }
+    }
+
     private fun processAndLoadConfig(rawUrl: String) {
-        try {
-            val json = V2RayCoreUtils.parseUrlToJson(rawUrl)
-            if (json.isNotEmpty() && !json.contains("\"outbounds\":[]")) {
-                currentConfigJson = json
-                val protocol = rawUrl.substringBefore("://")
-                tvConfigSummary.text = "Config siap: $protocol"
-                tvConfigSummary.setTextColor(Color.parseColor("#10B981"))
-                Toast.makeText(this, "Konfigurasi valid!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Format URL tidak didukung!", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Gagal memproses URL: ${e.message}", Toast.LENGTH_SHORT).show()
+        appendLog("[PARSE] Mengonversi URL ke JSON format V2RayNG...")
+        val json = V2RayCoreUtils.parseUrlToJson(rawUrl)
+        if (json.isNotEmpty()) {
+            currentConfigJson = json
+            val proto = rawUrl.substringBefore("://")
+            tvConfigSummary.text = "Config siap: $proto (Converted)"
+            tvConfigSummary.setTextColor(Color.parseColor("#10B981"))
+            appendLog("[PARSE] Berhasil! Konfigurasi siap dikirim ke TUN.")
+        } else {
+            appendLog("[ERROR] URL tidak dikenali atau format salah!")
+            Toast.makeText(this, "URL salah!", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun prepareAndStartVpn() {
         val intent = VpnService.prepare(this)
         if (intent != null) {
+            appendLog("[VPN] Meminta izin sistem VpnService...")
             vpnPermissionLauncher.launch(intent)
         } else {
-            startVpnService()
+            executeStartService()
         }
     }
 
-    private fun startVpnService() {
+    private fun executeStartService() {
         val intent = Intent(this, V2RayVpnService::class.java).apply {
             action = V2RayVpnService.ACTION_START
             putExtra(V2RayVpnService.EXTRA_CONFIG, currentConfigJson)
         }
         startService(intent)
 
-        isVpnRunning = true
         tvStatus.text = "CONNECTED"
         tvStatus.setTextColor(Color.parseColor("#10B981"))
-
         btnToggleVpn.text = "DISCONNECT VPN"
         btnToggleVpn.setBackgroundColor(Color.parseColor("#DC2626"))
     }
@@ -153,10 +177,8 @@ class MainActivity : AppCompatActivity() {
         }
         startService(intent)
 
-        isVpnRunning = false
         tvStatus.text = "DISCONNECTED"
         tvStatus.setTextColor(Color.parseColor("#EF4444"))
-
         btnToggleVpn.text = "CONNECT VPN"
         btnToggleVpn.setBackgroundColor(Color.parseColor("#2563EB"))
     }

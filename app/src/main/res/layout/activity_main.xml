@@ -21,7 +21,7 @@
             android:textSize="22sp"
             android:textStyle="bold" />
 
-        <!-- Kotak Status -->
+        <!-- Status Card -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -97,7 +97,7 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
-        <!-- Tombol Connect -->
+        <!-- Tombol Connect / Disconnect -->
         <Button
             android:id="@+id/btnToggleVpn"
             android:layout_width="match_parent"
@@ -109,7 +109,7 @@
             android:textSize="15sp"
             android:textStyle="bold" />
 
-        <!-- Header Debug Console -->
+        <!-- Baris Judul Log & Tombol Clear -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -136,7 +136,7 @@
                 android:textSize="11sp" />
         </LinearLayout>
 
-        <!-- Layar Console Log -->
+        <!-- Kotak Layar Log Real-Time -->
         <ScrollView
             android:id="@+id/scrollDebug"
             android:layout_width="match_parent"
