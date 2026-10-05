@@ -48,8 +48,8 @@ class V2RayVpnService : VpnService() {
             builder.setMtu(1500)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val myPkg: String = applicationContext.packageName
-                builder.addDisallowedApplication(myPkg)
+                val myPkgName: String = applicationContext.packageName
+                builder.addDisallowedApplication(myPkgName)
             }
 
             vpnInterface = builder.establish()
