@@ -55,13 +55,28 @@ object V2RayCoreUtils {
         val port = if (uri.port != -1) uri.port else 443
 
         val queryParams = parseQueryParams(uri.rawQuery)
-        val network = queryParams["type"] ?: "tcp"
-        val path = URLDecoder.decode(queryParams["path"] ?: "", "UTF-8")
+
+        val rawPath = queryParams["path"] ?: ""
+        val network = queryParams["type"] ?: if (rawPath.isNotEmpty()) "ws" else "tcp"
+
+        var path = try {
+            URLDecoder.decode(rawPath, "UTF-8")
+        } catch (e: Exception) {
+            rawPath
+        }
+        if (path.isNotEmpty() && !path.startsWith("/")) {
+            path = "/$path"
+        }
+
         val security = queryParams["security"] ?: if (port == 443) "tls" else "none"
         val hostHeader = queryParams["host"] ?: ""
+
+        // Prioritas SNI: SNI parameter -> Bug Host server asli -> Host Header
         val sni = queryParams["sni"]?.takeIf { it.isNotEmpty() }
-            ?: hostHeader.takeIf { it.isNotEmpty() }
-            ?: host
+            ?: host.takeIf { it.isNotEmpty() }
+            ?: hostHeader
+
+        Log.d(TAG, "Parsed VLESS -> Host: $host:$port | Net: $network | SNI: $sni | HostHeader: $hostHeader | Path: $path")
 
         return buildFullConfigJson("vless", host, port, uuid, network, path, security, sni, hostHeader)
     }
@@ -74,15 +89,21 @@ object V2RayCoreUtils {
         val host = vmessJson.optString("add", "")
         val port = vmessJson.optInt("port", 443)
         val uuid = vmessJson.optString("id", "")
-        val network = vmessJson.optString("net", "tcp").ifEmpty { "tcp" }
-        val path = vmessJson.optString("path", "")
+        var rawPath = vmessJson.optString("path", "")
+        if (rawPath.isNotEmpty() && !rawPath.startsWith("/")) {
+            rawPath = "/$rawPath"
+        }
+
+        val network = vmessJson.optString("net", "tcp").ifEmpty {
+            if (rawPath.isNotEmpty()) "ws" else "tcp"
+        }
         val security = vmessJson.optString("tls", "none").ifEmpty { "none" }
         val hostHeader = vmessJson.optString("host", "")
         val sni = vmessJson.optString("sni", "").takeIf { it.isNotEmpty() }
-            ?: hostHeader.takeIf { it.isNotEmpty() }
-            ?: host
+            ?: host.takeIf { it.isNotEmpty() }
+            ?: hostHeader
 
-        return buildFullConfigJson("vmess", host, port, uuid, network, path, security, sni, hostHeader)
+        return buildFullConfigJson("vmess", host, port, uuid, network, rawPath, security, sni, hostHeader)
     }
 
     private fun parseTrojan(url: String): String {
@@ -92,13 +113,23 @@ object V2RayCoreUtils {
         val port = if (uri.port != -1) uri.port else 443
 
         val queryParams = parseQueryParams(uri.rawQuery)
-        val network = queryParams["type"] ?: "tcp"
-        val path = URLDecoder.decode(queryParams["path"] ?: "", "UTF-8")
+        val rawPath = queryParams["path"] ?: ""
+        val network = queryParams["type"] ?: if (rawPath.isNotEmpty()) "ws" else "tcp"
+
+        var path = try {
+            URLDecoder.decode(rawPath, "UTF-8")
+        } catch (e: Exception) {
+            rawPath
+        }
+        if (path.isNotEmpty() && !path.startsWith("/")) {
+            path = "/$path"
+        }
+
         val security = queryParams["security"] ?: "tls"
         val hostHeader = queryParams["host"] ?: ""
         val sni = queryParams["sni"]?.takeIf { it.isNotEmpty() }
-            ?: hostHeader.takeIf { it.isNotEmpty() }
-            ?: host
+            ?: host.takeIf { it.isNotEmpty() }
+            ?: hostHeader
 
         return buildFullConfigJson("trojan", host, port, password, network, path, security, sni, hostHeader)
     }
@@ -116,12 +147,11 @@ object V2RayCoreUtils {
     ): String {
         val root = JSONObject()
 
-        // 1. Log
         root.put("log", JSONObject().apply {
             put("loglevel", "warning")
         })
 
-        // 2. DNS
+        // DNS Server Internal Core
         root.put("dns", JSONObject().apply {
             put("servers", JSONArray().apply {
                 put("1.1.1.1")
@@ -130,16 +160,17 @@ object V2RayCoreUtils {
             })
         })
 
-        // 3. Inbound SOCKS lokal (fallback bridge)
         val inboundsArray = JSONArray()
+
+        // 1. Inbound TUN Capture (Dokodemo-door)
         inboundsArray.put(JSONObject().apply {
-            put("tag", "socks-in")
-            put("port", 10808)
+            put("tag", "tun-in")
+            put("port", 10807)
             put("listen", "127.0.0.1")
-            put("protocol", "socks")
+            put("protocol", "dokodemo-door")
             put("settings", JSONObject().apply {
-                put("auth", "noauth")
-                put("udp", true)
+                put("network", "tcp,udp")
+                put("followRedirect", true)
             })
             put("sniffing", JSONObject().apply {
                 put("enabled", true)
@@ -149,9 +180,21 @@ object V2RayCoreUtils {
                 })
             })
         })
+
+        // 2. Inbound SOCKS
+        inboundsArray.put(JSONObject().apply {
+            put("tag", "socks-in")
+            put("port", 10808)
+            put("listen", "127.0.0.1")
+            put("protocol", "socks")
+            put("settings", JSONObject().apply {
+                put("auth", "noauth")
+                put("udp", true)
+            })
+        })
         root.put("inbounds", inboundsArray)
 
-        // 4. Outbound Proxy (VLESS / VMESS / TROJAN)
+        // Outbound Proxy
         val outboundProxy = JSONObject().apply {
             put("protocol", protocol)
             put("tag", "proxy")
@@ -159,9 +202,15 @@ object V2RayCoreUtils {
             val userSetting = JSONObject().apply {
                 if (protocol == "trojan") {
                     put("password", authId)
-                } else {
+                } else if (protocol == "vless") {
                     put("id", authId)
-                    if (protocol == "vless") put("encryption", "none")
+                    put("encryption", "none")
+                    put("level", 0)
+                } else if (protocol == "vmess") {
+                    put("id", authId)
+                    put("alterId", 0)
+                    put("security", "auto")
+                    put("level", 0)
                 }
             }
 
@@ -171,14 +220,16 @@ object V2RayCoreUtils {
                 put("users", JSONArray().apply { put(userSetting) })
             }
 
-            put("settings", JSONObject().apply {
-                put("vnext", JSONArray().apply { put(serverSetting) })
-                if (protocol == "trojan") {
+            if (protocol == "trojan") {
+                put("settings", JSONObject().apply {
                     put("servers", JSONArray().apply { put(serverSetting) })
-                }
-            })
+                })
+            } else {
+                put("settings", JSONObject().apply {
+                    put("vnext", JSONArray().apply { put(serverSetting) })
+                })
+            }
 
-            // Stream Settings (Transport & TLS)
             val streamSettings = JSONObject().apply {
                 put("network", network)
 
@@ -192,7 +243,7 @@ object V2RayCoreUtils {
 
                 if (network.equals("ws", ignoreCase = true)) {
                     put("wsSettings", JSONObject().apply {
-                        if (path.isNotEmpty()) put("path", path)
+                        put("path", if (path.isNotEmpty()) path else "/")
                         put("headers", JSONObject().apply {
                             if (hostHeader.isNotEmpty()) {
                                 put("Host", hostHeader)
@@ -213,7 +264,7 @@ object V2RayCoreUtils {
             put("streamSettings", streamSettings)
         }
 
-        // Outbound Freedom (Direct)
+        // Outbound Direct
         val outboundDirect = JSONObject().apply {
             put("protocol", "freedom")
             put("tag", "direct")
@@ -228,7 +279,7 @@ object V2RayCoreUtils {
         }
         root.put("outbounds", outboundsArray)
 
-        // 5. Routing Rules (Prioritaskan proxy untuk semua request TUN)
+        // Routing: Force all TUN traffic to proxy outbound
         val routing = JSONObject().apply {
             put("domainStrategy", "IPIfNonMatch")
             put("rules", JSONArray().apply {
@@ -260,42 +311,42 @@ object V2RayCoreUtils {
         return "{\"inbounds\":[],\"outbounds\":[]}"
     }
 
-    fun startCoreWithTun(context: Context, configJson: String, tunFd: Int): Boolean {
+    fun startCoreWithTun(context: Context, configJson: String, tunFd: Int, logCallback: ((String) -> Unit)? = null): Boolean {
         return try {
             copyAssetsIfNeeded(context)
             val assetPath = context.filesDir.absolutePath
 
-            Log.d(TAG, "Assets Path: $assetPath | TUN FD: $tunFd")
+            logCallback?.invoke("Assets dir: $assetPath")
+            logCallback?.invoke("Mengoper FD TUN: $tunFd")
 
             try {
                 val libClazz = Class.forName("libv2ray.Libv2ray")
 
-                // Inisialisasi Environment Asset (geoip.dat, geosite.dat)
                 try {
                     val initMethod = libClazz.getMethod("initV2Env", String::class.java)
                     initMethod.invoke(null, assetPath)
+                    logCallback?.invoke("initV2Env OK")
                 } catch (e: Exception) {
-                    Log.w(TAG, "initV2Env skipped: ${e.message}")
+                    logCallback?.invoke("initV2Env skipped: ${e.message}")
                 }
 
-                // Jalankan V2Ray Core dengan TUN FD
                 try {
                     val startMethod = libClazz.getMethod("startV2Ray", String::class.java, Int::class.javaPrimitiveType)
                     startMethod.invoke(null, configJson, tunFd)
-                    Log.d(TAG, "Core Tun V2Ray BERHASIL DIJALANKAN!")
+                    logCallback?.invoke("startV2Ray berhasil dimulai.")
                     return true
                 } catch (e: Exception) {
-                    Log.e(TAG, "Gagal memanggil startV2Ray JNI: ${e.message}", e)
+                    logCallback?.invoke("Gagal panggil startV2Ray JNI: ${e.message}")
                     return false
                 }
 
             } catch (e: ClassNotFoundException) {
-                Log.e(TAG, "libv2ray.Libv2ray class tidak ditemukan di libs!")
+                logCallback?.invoke("Class libv2ray.Libv2ray tidak ditemukan di .aar")
                 return false
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error startCoreWithTun: ${e.message}", e)
+            logCallback?.invoke("startCoreWithTun Exception: ${e.message}")
             false
         }
     }
