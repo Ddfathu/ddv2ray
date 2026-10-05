@@ -24,9 +24,9 @@ class V2RayVpnService : VpnService() {
         createNotificationChannel()
         startForeground(1, createNotification())
 
-        // Kita inisialisasi langsung tanpa fungsi Builder terpisah yang rawan error
         try {
-            val builder = VpnService.Builder(this)
+            // Menggunakan pemanggilan Builder murni tanpa membingungkan compiler Kotlin
+            val builder: Builder = Builder()
             builder.addAddress("10.0.0.2", 24)
             builder.addRoute("0.0.0.0", 0)
             builder.addDnsServer("1.1.1.1")
