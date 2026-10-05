@@ -147,7 +147,6 @@ object V2RayCoreUtils {
             }
             logCallback?.invoke("[METHODS] ${relevantMethods.joinToString(", ")}")
 
-            // Inisialisasi Environment Libv2ray
             coreClazz.methods.firstOrNull { it.name.startsWith("init", true) }?.let { initM ->
                 try {
                     logCallback?.invoke("[CORE] Menjalankan ${initM.name}...")
@@ -163,15 +162,20 @@ object V2RayCoreUtils {
 
             val finalConfig = prepareConfigForTun(configJson)
 
-            // Jalur 1: Pola V2RayPoint khas v2rayNG
             val newPointMethod = coreClazz.methods.firstOrNull { it.name.equals("newV2RayPoint", ignoreCase = true) }
             if (newPointMethod != null && supportSetInstance != null) {
                 logCallback?.invoke("[EXEC] Membuat V2RayPoint...")
-                val point = when (newPointMethod.parameterTypes.size) {
-                    2 -> newPointMethod.invoke(null, supportSetInstance, false)
-                    1 -> newPointMethod.invoke(null, supportSetInstance)
-                    else -> newPointMethod.invoke(null)
+
+                var point: Any? = null
+                val paramCount = newPointMethod.parameterTypes.size
+                if (paramCount == 2) {
+                    point = newPointMethod.invoke(null, supportSetInstance, false)
+                } else if (paramCount == 1) {
+                    point = newPointMethod.invoke(null, supportSetInstance)
+                } else {
+                    point = newPointMethod.invoke(null)
                 }
+
                 v2rayPointInstance = point
 
                 if (point != null) {
@@ -214,7 +218,6 @@ object V2RayCoreUtils {
                 }
             }
 
-            // Jalur 2: Direct Start Method jika tersedia (startV2Ray)
             val targetStart: Method? = coreClazz.methods.firstOrNull { m ->
                 val n = m.name.lowercase()
                 (n.startsWith("start") || n.startsWith("run")) && !n.contains("request")
