@@ -20,35 +20,30 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Download & Extract v2rayNG Core (.so & assets)
+      - name: Download & Setup v2rayNG Core (AAR & Assets)
         run: |
+          mkdir -p app/libs
           mkdir -p app/src/main/jniLibs
           mkdir -p app/src/main/assets
 
-          echo "Mengunduh binary APK v2rayNG terbaru..."
-          LATEST_URL=$(curl -s https://api.github.com/repos/2dust/v2rayNG/releases/latest | grep "browser_download_url.*universal.apk" | cut -d '"' -f 4 | head -n 1)
-          if [ -z "$LATEST_URL" ]; then
-            LATEST_URL=$(curl -s https://api.github.com/repos/2dust/v2rayNG/releases/latest | grep "browser_download_url.*apk" | cut -d '"' -f 4 | head -n 1)
-          fi
-          
-          curl -L -o v2rayng.apk "$LATEST_URL"
-          unzip -q v2rayng.apk -d v2ray_temp
+          echo "===> Mengambil libv2ray.aar..."
+          # Unduh AAR libv2ray resmi yang digunakan oleh v2rayNG
+          curl -L -o app/libs/libv2ray.aar https://github.com/2dust/v2rayNG/raw/master/V2rayNG/app/libs/libv2ray.aar || true
 
-          if [ -d "v2ray_temp/lib" ]; then
-            cp -r v2ray_temp/lib/* app/src/main/jniLibs/
+          # Jika link master di atas kosong, buat fallback dummy AAR atau ambil dari release
+          if [ ! -s app/libs/libv2ray.aar ]; then
+            echo "Mengambil AAR dari repositori release binary..."
+            curl -L -o app/libs/libv2ray.aar https://github.com/2dust/AndroidLibV2rayLite/releases/latest/download/libv2ray.aar
           fi
 
-          if [ -f "v2ray_temp/assets/geoip.dat" ]; then
-            cp v2ray_temp/assets/geoip.dat app/src/main/assets/
-            cp v2ray_temp/assets/geosite.dat app/src/main/assets/
-          else
-            curl -L -o app/src/main/assets/geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-            curl -L -o app/src/main/assets/geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-          fi
+          echo "===> Mengambil rules asset (geoip & geosite)..."
+          curl -L -o app/src/main/assets/geoip.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+          curl -L -o app/src/main/assets/geosite.dat https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
 
-          rm -rf v2ray_temp v2rayng.apk
+          echo "Isi folder app/libs:"
+          ls -la app/libs/
 
-      - name: Grant Execute Permission to Gradlew
+      - name: Grant Execute Permission
         run: chmod +x gradlew
 
       - name: Build APK with Gradle
