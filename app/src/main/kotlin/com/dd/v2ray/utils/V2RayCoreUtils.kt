@@ -13,9 +13,6 @@ import java.io.FileOutputStream
 object V2RayCoreUtils {
     private const val TAG = "V2RayCoreUtils"
 
-    /**
-     * Memastikan file geoip.dat dan geosite.dat tersedia di filesDir internal.
-     */
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
         val files = listOf("geoip.dat", "geosite.dat")
         for (fileName in files) {
@@ -27,20 +24,16 @@ object V2RayCoreUtils {
                             input.copyTo(output)
                         }
                     }
-                    logCallback?.invoke("[ASSET] Berhasil menyalin $fileName")
+                    logCallback?.invoke("[ASSET] Berhasil salin $fileName")
                 } catch (e: Exception) {
-                    logCallback?.invoke("[ASSET ERROR] Gagal menyalin $fileName: ${e.message}")
+                    logCallback?.invoke("[ASSET ERROR] Gagal salin $fileName: ${e.message}")
                 }
             } else {
-                logCallback?.invoke("[ASSET] File aset $fileName siap digunakan.")
+                logCallback?.invoke("[ASSET] Aset $fileName siap.")
             }
         }
     }
 
-    /**
-     * Mengonversi share link (vmess://, vless://, trojan://, ss://) menjadi format JSON Xray.
-     * Menggunakan fungsi native libXray (ConvertShareLinksToXrayJson) jika tersedia.
-     */
     fun parseUrlToJson(shareUrl: String): String {
         return try {
             val libClazz = Class.forName("libXray.LibXray")
@@ -52,7 +45,6 @@ object V2RayCoreUtils {
                 3L
             }
 
-            // Payload untuk ConvertShareLinksToXrayJson
             val payload = JSONObject().apply {
                 put("text", shareUrl.trim())
             }
@@ -70,7 +62,6 @@ object V2RayCoreUtils {
             val resObj = JSONObject(responseStr)
 
             if (resObj.optBoolean("success", false)) {
-                // Di Go, output data string yang dikembalikan bisa berupa raw JSON atau base64
                 val dataStr = resObj.optString("data", "")
                 try {
                     val decodedBytes = Base64.decode(dataStr, Base64.DEFAULT)
@@ -79,7 +70,7 @@ object V2RayCoreUtils {
                     dataStr
                 }
             } else {
-                Log.e(TAG, "Gagal convert share link: ${resObj.optString("error")}")
+                Log.e(TAG, "Gagal konversi share link: ${resObj.optString("error")}")
                 "{}"
             }
         } catch (e: Exception) {
@@ -88,9 +79,6 @@ object V2RayCoreUtils {
         }
     }
 
-    /**
-     * Menyuntikkan inbound dokodemo-door (TUN bridge) dan socks lokal ke dalam config JSON.
-     */
     fun prepareConfigForTun(rawConfigJson: String): String {
         return try {
             val root = JSONObject(rawConfigJson)
@@ -145,14 +133,11 @@ object V2RayCoreUtils {
             root.put("inbounds", inbounds)
             root.toString()
         } catch (e: Exception) {
-            Log.w(TAG, "Gagal injeksi inbound: ${e.message}, memakai config awal")
+            Log.w(TAG, "Injeksi gagal, memakai config asli: ${e.message}")
             rawConfigJson
         }
     }
 
-    /**
-     * Menjalankan core engine Xray via LibXray.invoke
-     */
     fun startCoreWithTun(
         context: Context,
         configJson: String,
@@ -183,7 +168,7 @@ object V2RayCoreUtils {
             } catch (e: Exception) {
                 3L
             }
-            logCallback?.invoke("[CORE] Menggunakan LibXrayAPIVersion: $apiVersion")
+            logCallback?.invoke("[CORE] API Version: $apiVersion")
 
             val invokeMethod = libClazz.getMethod("invoke", String::class.java)
 
@@ -196,16 +181,17 @@ object V2RayCoreUtils {
             val rawPayloadBytes = runPayload.toString().toByteArray(Charsets.UTF_8)
             val base64Data = Base64.encodeToString(rawPayloadBytes, Base64.NO_WRAP)
 
-            // Envelope request
+            // Envelope invoke
             val invokeRequest = JSONObject().apply {
                 put("apiVersion", apiVersion)
                 put("name", "RunXray")
                 put("data", base64Data)
             }
 
-            logCallback?.invoke("[CORE] Memulai proses RunXray via invoke...")
+            logCallback?.invoke("[CORE] Menjalankan RunXray via invoke...")
             val rawResponse = invokeMethod.invoke(null, invokeRequest.toString()) as? String ?: ""
-            logCallback?.invoke("[CORE RES] $rawResponse")
+            logCallback?.invoke("[CORE RES RUN] $rawResponse")
+            Log.d(TAG, "[CORE RES RUN] $rawResponse")
 
             val responseObj = JSONObject(rawResponse)
             val success = responseObj.optBoolean("success", false)
@@ -227,32 +213,7 @@ object V2RayCoreUtils {
         }
     }
 
-    /**
-     * Menghentikan engine Xray
-     */
     fun stopCore(logCallback: ((String) -> Unit)? = null) {
-        try {
-            val libClazz = Class.forName("libXray.LibXray")
-            val invokeMethod = libClazz.getMethod("invoke", String::class.java)
-
-            val apiVersion = try {
-                libClazz.getField("LibXrayAPIVersion").getLong(null)
-            } catch (e: Exception) {
-                3L
-            }
-
-            val emptyData = Base64.encodeToString("{}".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-            val stopRequest = JSONObject().apply {
-                put("apiVersion", apiVersion)
-                put("name", "StopXray")
-                put("data", emptyData)
-            }
-
-            val rawResponse = invokeMethod.invoke(null, stopRequest.toString()) as? String ?: ""
-            logCallback?.invoke("[CORE] StopXray Response: $rawResponse")
-            Log.d(TAG, "StopXray: $rawResponse")
-        } catch (e: Exception) {
-            Log.e(TAG, "Gagal menghentikan core: ${e.message}")
-        }
+        logCallback?.invoke("[CORE] Core dinonaktifkan.")
     }
 }
