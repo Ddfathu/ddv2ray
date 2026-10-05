@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.dd.v2ray.MainActivity
 import com.dd.v2ray.utils.V2RayCoreUtils
+import java.lang.reflect.Proxy
 
 class V2RayVpnService : VpnService() {
 
@@ -42,7 +43,7 @@ class V2RayVpnService : VpnService() {
         val action = intent?.action
 
         if (action == ACTION_STOP) {
-            log("[VPN] Menghentikan VPN...")
+            log("[VPN] Menghentikan VPN Service...")
             stopVpn()
             return START_NOT_STICKY
         }
@@ -59,19 +60,14 @@ class V2RayVpnService : VpnService() {
     }
 
     private fun startVpn(configJson: String) {
-        log("[1/4] Membangun Virtual TUN Interface...")
+        log("[1/4] Membangun antarmuka Virtual TUN...")
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
 
         try {
-            // 1. Daftarkan socket protect ke libXray agar tidak terjadi loop koneksi
-            try {
-                registerXrayDialer()
-                log("[CORE] Dialer controller terdaftar (protect socket aktif).")
-            } catch (e: Exception) {
-                log("[WARN] Register dialer note: ${e.message}")
-            }
+            // Mendaftarkan perlindungan socket ke engine native libXray
+            registerXrayDialer()
 
             val builder = Builder()
             builder.setSession("DDV2Ray")
@@ -82,11 +78,12 @@ class V2RayVpnService : VpnService() {
             builder.addDnsServer("8.8.8.8")
             builder.addRoute("0.0.0.0", 0)
 
+            // Bypass paket aplikasi sendiri agar koneksi internal tidak tersedot TUN
             try {
                 builder.addDisallowedApplication(packageName)
-                log("[2/4] Aplikasi sendiri di-bypass dari TUN.")
+                log("[2/4] Package sendiri di-bypass dari rute TUN.")
             } catch (e: Exception) {
-                log("[WARN] Bypass package: ${e.message}")
+                log("[WARN] Bypass package error: ${e.message}")
             }
 
             vpnInterface = builder.establish()
@@ -94,7 +91,7 @@ class V2RayVpnService : VpnService() {
 
             if (pfd != null) {
                 val fd = pfd.fd
-                log("[3/4] TUN Aktif dengan FD: $fd. Menjalankan libXray...")
+                log("[3/4] TUN Aktif dengan FD: $fd. Menjalankan core...")
 
                 val success = V2RayCoreUtils.startCoreWithTun(this, configJson, fd) { coreMsg ->
                     log(coreMsg)
@@ -102,18 +99,18 @@ class V2RayVpnService : VpnService() {
 
                 if (success) {
                     isRunning = true
-                    log("[4/4] CONNECTED! Core Xray aktif.")
+                    log("[4/4] CONNECTED! Engine Xray aktif.")
                 } else {
                     log("[ERROR] Native Core gagal dijalankan!")
                     stopVpn()
                 }
             } else {
-                log("[ERROR] Interface TUN NULL!")
+                log("[ERROR] builder.establish() menghasilkan NULL!")
                 stopVpn()
             }
 
         } catch (e: Exception) {
-            log("[FATAL] Gagal membuat VPN: ${e.message}")
+            log("[FATAL] Gagal inisialisasi VPN: ${e.message}")
             stopVpn()
         }
     }
@@ -122,13 +119,14 @@ class V2RayVpnService : VpnService() {
         try {
             val libClazz = Class.forName("libXray.LibXray")
             val dialerInterface = Class.forName("libXray.DialerController")
-            
-            // Buat dynamic proxy untuk interface DialerController
-            val proxyInstance = java.lang.reflect.Proxy.newProxyInstance(
+
+            // Proxy dynamic untuk mengarahkan fungsi protect native ke VpnService.protect()
+            val proxyInstance = Proxy.newProxyInstance(
                 dialerInterface.classLoader,
                 arrayOf(dialerInterface)
             ) { _, method, args ->
-                if (method.name == "protect" || method.name == "dial" || method.name == "protectFD") {
+                val methodName = method.name
+                if (methodName == "protect" || methodName == "dial" || methodName == "protectFD") {
                     val fd = (args?.get(0) as? Number)?.toLong() ?: 0L
                     this@V2RayVpnService.protect(fd.toInt())
                 } else {
@@ -138,8 +136,9 @@ class V2RayVpnService : VpnService() {
 
             val regMethod = libClazz.getMethod("registerDialerController", dialerInterface)
             regMethod.invoke(null, proxyInstance)
+            log("[CORE] DialerController terdaftar (Socket Protect Aktif).")
         } catch (e: Exception) {
-            Log.w(TAG, "registerXrayDialer skipped: ${e.message}")
+            log("[WARN] Inisialisasi DialerController dilewati: ${e.message}")
         }
     }
 
@@ -160,7 +159,7 @@ class V2RayVpnService : VpnService() {
         }
 
         stopSelf()
-        log("[SELESAI] VPN mati. Jaringan kembali normal.")
+        log("[SELESAI] VPN dimatikan. Jaringan kembali ke mode normal.")
     }
 
     override fun protect(socket: Int): Boolean {
@@ -199,7 +198,7 @@ class V2RayVpnService : VpnService() {
         return NotificationCompat.Builder(this)
             .setChannelId(CHANNEL_ID)
             .setContentTitle("DDV2Ray Aktif")
-            .setContentText("Terhubung ke server V2Ray")
+            .setContentText("Koneksi VPN sedang berjalan")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Putuskan", stopPendingIntent)

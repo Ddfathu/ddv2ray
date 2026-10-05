@@ -27,7 +27,7 @@ object V2RayCoreUtils {
                     }
                     logCallback?.invoke("[ASSET] Berhasil salin $name")
                 } catch (e: Exception) {
-                    logCallback?.invoke("[WARN] Aset $name tidak ada di assets: ${e.message}")
+                    logCallback?.invoke("[WARN] Aset $name dilewati: ${e.message}")
                 }
             }
         }
@@ -43,7 +43,7 @@ object V2RayCoreUtils {
                 else -> ""
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Gagal parsing: ${e.message}")
+            Log.e(TAG, "Gagal parsing config: ${e.message}")
             ""
         }
     }
@@ -120,7 +120,7 @@ object V2RayCoreUtils {
     ): String {
         val root = JSONObject()
 
-        // 1. Log Config
+        // 1. Log
         root.put("log", JSONObject().apply {
             put("loglevel", "warning")
         })
@@ -133,7 +133,7 @@ object V2RayCoreUtils {
             })
         })
 
-        // 3. Inbounds: SOCKS Port 10808 (Pintu masuk koneksi lokal)
+        // 3. Inbounds: Socks lokal
         val inbounds = JSONArray().apply {
             put(JSONObject().apply {
                 put("tag", "socks-in")
@@ -255,47 +255,53 @@ object V2RayCoreUtils {
     fun startCoreWithTun(context: Context, configJson: String, tunFd: Int, logCallback: ((String) -> Unit)? = null): Boolean {
         return try {
             copyAssetsIfNeeded(context, logCallback)
-            val assetPath = context.filesDir.absolutePath
 
-            // 1. Simpan konfigurasi JSON resmi ke file lokal internal
-            val configFile = File(context.filesDir, "config.json")
-            configFile.writeText(configJson)
-            logCallback?.invoke("[CORE] File konfigurasi ditulis ke: ${configFile.name}")
-
-            logCallback?.invoke("[CORE] Menghubungkan ke kelas libXray.LibXray...")
+            logCallback?.invoke("[CORE] Menghubungkan ke class libXray.LibXray...")
             val libClazz = Class.forName("libXray.LibXray")
+
+            // Ambil LibXrayAPIVersion resmi dari static field di binary
+            val apiVersion = try {
+                libClazz.getField("LibXrayAPIVersion").getLong(null)
+            } catch (e: Exception) {
+                logCallback?.invoke("[WARN] Gagal baca LibXrayAPIVersion: ${e.message}")
+                1L
+            }
+            logCallback?.invoke("[CORE] Menggunakan LibXrayAPIVersion: $apiVersion")
+
             val invokeMethod = libClazz.getMethod("invoke", String::class.java)
 
-            // 2. Format Request resmi untuk LibXray.invoke
-            val runRequest = JSONObject().apply {
-                put("name", "runXray")
-                put("data", JSONObject().apply {
-                    put("datDir", assetPath)
-                    put("configPath", configFile.absolutePath)
-                    put("maxMemory", 0)
-                })
+            // Struct Go RunXrayRequest: { "xrayJson": string }
+            val runPayload = JSONObject().apply {
+                put("xrayJson", configJson)
             }
 
-            logCallback?.invoke("[CORE] Memulai proses RunXray...")
-            val rawResponse = invokeMethod.invoke(null, runRequest.toString()) as? String ?: ""
+            // Struct Go LibXrayInvokeRequest: { "apiVersion": int64, "name": string, "data": object }
+            val invokeRequest = JSONObject().apply {
+                put("apiVersion", apiVersion)
+                put("name", "RunXray")
+                put("data", runPayload)
+            }
+
+            logCallback?.invoke("[CORE] Memulai proses RunXray via invoke...")
+            val rawResponse = invokeMethod.invoke(null, invokeRequest.toString()) as? String ?: ""
             logCallback?.invoke("[CORE RES] $rawResponse")
 
             val responseObj = JSONObject(rawResponse)
             val success = responseObj.optBoolean("success", false)
 
             if (success) {
-                logCallback?.invoke("[CORE] Mesin Xray AKTIF dan berjalan normal!")
+                logCallback?.invoke("[CORE] Xray Engine AKTIF dan berjalan lancar!")
                 true
             } else {
-                val errorMsg = responseObj.optString("error", "Gagal memulai core")
+                val errorMsg = responseObj.optString("error", "Gagal menjalankan Xray")
                 logCallback?.invoke("[CORE ERROR] $errorMsg")
                 false
             }
         } catch (e: ClassNotFoundException) {
-            logCallback?.invoke("[FATAL] libXray.LibXray tidak ditemukan di DEX: ${e.message}")
+            logCallback?.invoke("[FATAL] libXray.LibXray tidak ditemukan: ${e.message}")
             false
         } catch (e: Exception) {
-            logCallback?.invoke("[FATAL] Error eksekusi libXray: ${e.message}")
+            logCallback?.invoke("[FATAL] Error startCore: ${e.message}")
             false
         }
     }
@@ -303,13 +309,20 @@ object V2RayCoreUtils {
     fun stopCore() {
         try {
             val libClazz = Class.forName("libXray.LibXray")
+            val apiVersion = try {
+                libClazz.getField("LibXrayAPIVersion").getLong(null)
+            } catch (_: Exception) {
+                1L
+            }
+
             val invokeMethod = libClazz.getMethod("invoke", String::class.java)
             val stopRequest = JSONObject().apply {
-                put("name", "stopXray")
+                put("apiVersion", apiVersion)
+                put("name", "StopXray")
                 put("data", JSONObject())
             }
             invokeMethod.invoke(null, stopRequest.toString())
-            Log.d(TAG, "libXray dihentikan.")
+            Log.d(TAG, "Xray engine dihentikan.")
         } catch (_: Exception) {}
     }
 }
