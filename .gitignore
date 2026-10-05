@@ -1,3 +1,4 @@
 
 *.apk
 *.zip
+!app/libs/libv2ray.aar
