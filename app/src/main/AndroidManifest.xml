@@ -1,23 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permission Wajib V2Ray & Kamera -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.CAMERA" />
-
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="true"
-        android:icon="@android:drawable/ic_menu_compass"
-        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:label="DDV2Ray"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
-        
-        <!-- Activity Utama (UI) -->
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -27,20 +23,19 @@
             </intent-filter>
         </activity>
 
-        <!-- Service Core VPN V2Ray -->
         <service
             android:name=".service.V2RayVpnService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:exported="false">
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
 
-        <!-- Broadcast Receiver Boot Completed -->
         <receiver
             android:name=".receiver.BootReceiver"
-            android:exported="true">
+            android:enabled="true"
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
