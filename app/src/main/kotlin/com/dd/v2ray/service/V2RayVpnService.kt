@@ -25,7 +25,6 @@ class V2RayVpnService : VpnService() {
         startForeground(1, createNotification())
 
         try {
-            // Menggunakan pemanggilan Builder murni tanpa membingungkan compiler Kotlin
             val builder: Builder = Builder()
             builder.addAddress("10.0.0.2", 24)
             builder.addRoute("0.0.0.0", 0)
@@ -37,6 +36,7 @@ class V2RayVpnService : VpnService() {
             val pfd = vpnInterface
             if (pfd != null && configJson.isNotEmpty()) {
                 val fd = pfd.detachFd()
+                // Pastikan pemanggilan di bawah ini menggunakan variabel configJson yang benar (bukan referensi properti)
                 V2RayCoreUtils.startCoreWithTun(this, configJson, fd)
             }
         } catch (e: Exception) {
