@@ -3,6 +3,7 @@ package com.dd.v2ray.utils
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.system.Os
 import android.util.Log
 import org.json.JSONArray
@@ -11,6 +12,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.lang.reflect.InvocationTargetException
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -23,18 +25,28 @@ object V2RayCoreUtils {
     var activeController: Any? = null
     private var coreThread: Thread? = null
 
-    // PENCATAT LOG CRASH KE SDCARD TANPA ROOT
-    fun logCrashToFile(context: Context, tag: String, throwable: Throwable) {
-        try {
-            val sw = StringWriter()
-            throwable.printStackTrace(PrintWriter(sw))
-            val text = "=== [CRASH LOG] $tag ===\nPesan: ${throwable.message}\nTrace:\n$sw\n\n"
-            
-            val f1 = File(context.filesDir, "ddv2ray_crash.txt")
-            f1.appendText(text)
+    private fun logDetailedCrash(context: Context, tag: String, throwable: Throwable, logCallback: ((String) -> Unit)? = null) {
+        val actualError = if (throwable is InvocationTargetException && throwable.targetException != null) {
+            throwable.targetException
+        } else {
+            throwable.cause ?: throwable
+        }
 
-            val f2 = File("/sdcard/ddv2ray_crash.txt")
-            f2.appendText(text)
+        val sw = StringWriter()
+        actualError.printStackTrace(PrintWriter(sw))
+        val fullTrace = sw.toString()
+        val errorMsg = actualError.message ?: actualError.javaClass.simpleName
+
+        logCallback?.invoke("[CRASH DETAIL] $tag: $errorMsg")
+        val lines = fullTrace.lines().take(4).joinToString(" -> ")
+        logCallback?.invoke("[TRACE] $lines")
+
+        try {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (downloadDir != null && downloadDir.exists()) {
+                val crashFile = File(downloadDir, "ddv2ray_crash.txt")
+                crashFile.appendText("=== $tag ===\n$errorMsg\n$fullTrace\n\n")
+            }
         } catch (_: Exception) {}
     }
 
@@ -202,13 +214,6 @@ object V2RayCoreUtils {
         supportSetInstance: Any? = null,
         logCallback: ((String) -> Unit)? = null
     ): Boolean {
-        // Pasang Global Exception Hook
-        val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            logCrashToFile(context, "Uncaught di Thread ${t.name}", e)
-            prevHandler?.uncaughtException(t, e)
-        }
-
         try {
             copyAssetsIfNeeded(context, logCallback)
             val assetDir = context.filesDir.absolutePath
@@ -239,7 +244,7 @@ object V2RayCoreUtils {
                         else -> initEnv.invoke(null)
                     }
                 } catch (e: Throwable) {
-                    logCrashToFile(context, "initCoreEnv", e)
+                    logDetailedCrash(context, "initCoreEnv", e, logCallback)
                 }
             }
 
@@ -252,7 +257,7 @@ object V2RayCoreUtils {
                         newControllerMethod.invoke(null)
                     }
                 } catch (e: Throwable) {
-                    logCrashToFile(context, "newCoreController", e)
+                    logDetailedCrash(context, "newCoreController", e, logCallback)
                     null
                 }
 
@@ -274,15 +279,13 @@ object V2RayCoreUtils {
                                     startLoopMethod.invoke(controller, configJson, tunFd)
                                 }
                             } catch (t: Throwable) {
-                                logCrashToFile(context, "startLoop Core Thread", t)
-                                logCallback?.invoke("[CRASH CORE] ${t.message}")
+                                logDetailedCrash(context, "startLoop Core Thread", t, logCallback)
                             }
                         }
 
-                        // Tes ping mandiri via background thread aman
                         thread(start = true, name = "SafePingThread") {
                             try {
-                                Thread.sleep(2000)
+                                Thread.sleep(2500)
                                 runSafeDiagnose(logCallback)
                             } catch (_: Exception) {}
                         }
@@ -294,29 +297,22 @@ object V2RayCoreUtils {
             }
             return false
         } catch (e: Throwable) {
-            logCrashToFile(context, "startCoreWithTun", e)
-            logCallback?.invoke("[FATAL] Error start: ${e.message}")
+            logDetailedCrash(context, "startCoreWithTun", e, logCallback)
             return false
         }
     }
 
-    // DIAGNOSA AMAN MENGGUNAKAN SOCKET JAVA
     private fun runSafeDiagnose(logCallback: ((String) -> Unit)?) {
         logCallback?.invoke("[DIAGNOSA] Memulai tes jalur data...")
-        
-        // 1. Cek ketersediaan port SOCKS internal 10808
-        var socksOk = false
         try {
             Socket().use { s ->
                 s.connect(InetSocketAddress("127.0.0.1", 10808), 1200)
-                socksOk = true
             }
-            logCallback?.invoke("[PORT 10808] TERBUKA (Core menerima koneksi)")
+            logCallback?.invoke("[PORT 10808] TERBUKA")
         } catch (e: Exception) {
-            logCallback?.invoke("[PORT 10808] TERTUTUP (${e.message})")
+            logCallback?.invoke("[PORT 10808] TERTUTUP: ${e.message}")
         }
 
-        // 2. Tes HTTP ping langsung
         try {
             val t0 = System.currentTimeMillis()
             val url = URL("https://connectivitycheck.gstatic.com/generate_204")
@@ -326,9 +322,9 @@ object V2RayCoreUtils {
             conn.instanceFollowRedirects = false
             val code = conn.responseCode
             val ping = System.currentTimeMillis() - t0
-            logCallback?.invoke("[PING SUKSES] HTTP $code ($ping ms) - Internet Nyambung!")
+            logCallback?.invoke("[PING] HTTP $code ($ping ms)")
         } catch (e: Exception) {
-            logCallback?.invoke("[PING GAGAL] ${e.javaClass.simpleName}: ${e.message}")
+            logCallback?.invoke("[PING] Error: ${e.message}")
         }
     }
 
