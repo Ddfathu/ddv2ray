@@ -3,7 +3,6 @@ package com.dd.v2ray.utils
 import android.content.Context
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.system.Os
 import android.util.Log
 import org.json.JSONArray
@@ -13,10 +12,6 @@ import java.io.FileOutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.lang.reflect.InvocationTargetException
-import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Socket
-import java.net.URL
 import java.net.URLDecoder
 import kotlin.concurrent.thread
 
@@ -38,7 +33,7 @@ object V2RayCoreUtils {
         val errorMsg = actualError.message ?: actualError.javaClass.simpleName
 
         logCallback?.invoke("[CRASH DETAIL] $tag: $errorMsg")
-        val lines = fullTrace.lines().take(4).joinToString(" -> ")
+        val lines = fullTrace.lines().take(3).joinToString(" -> ")
         logCallback?.invoke("[TRACE] $lines")
     }
 
@@ -98,7 +93,12 @@ object V2RayCoreUtils {
                     put("loglevel", "warning")
                 })
 
-                // INBOUND YANG BENAR: SOCKS + HTTP (Port eksplisit, hindari error AnyIP no port)
+                // DNS internal Xray
+                val dns = JSONObject()
+                dns.put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8").put("localhost"))
+                root.put("dns", dns)
+
+                // Inbounds (SOCKS & HTTP)
                 val inbounds = JSONArray()
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
@@ -126,7 +126,7 @@ object V2RayCoreUtils {
                 })
                 root.put("inbounds", inbounds)
 
-                // OUTBOUNDS
+                // Outbounds
                 val outbounds = JSONArray()
                 val vlessOutbound = JSONObject().apply {
                     put("tag", "proxy")
@@ -181,7 +181,7 @@ object V2RayCoreUtils {
                 })
                 root.put("outbounds", outbounds)
 
-                // ROUTING
+                // Routing
                 val routing = JSONObject()
                 routing.put("domainStrategy", "AsIs")
                 val rules = JSONArray()
@@ -277,13 +277,7 @@ object V2RayCoreUtils {
                             }
                         }
 
-                        thread(start = true, name = "SafePingThread") {
-                            try {
-                                Thread.sleep(2500)
-                                runSafeDiagnose(logCallback)
-                            } catch (_: Exception) {}
-                        }
-
+                        Thread.sleep(800)
                         logCallback?.invoke("[CORE SUCCESS] Engine aktif!")
                         return true
                     }
@@ -293,18 +287,6 @@ object V2RayCoreUtils {
         } catch (e: Throwable) {
             logDetailedCrash(context, "startCoreWithTun", e, logCallback)
             return false
-        }
-    }
-
-    private fun runSafeDiagnose(logCallback: ((String) -> Unit)?) {
-        logCallback?.invoke("[DIAGNOSA] Memeriksa port SOCKS...")
-        try {
-            Socket().use { s ->
-                s.connect(InetSocketAddress("127.0.0.1", 10808), 1500)
-            }
-            logCallback?.invoke("[PORT 10808] TERBUKA! Core sukses running.")
-        } catch (e: Exception) {
-            logCallback?.invoke("[PORT 10808] TERTUTUP: ${e.message}")
         }
     }
 
