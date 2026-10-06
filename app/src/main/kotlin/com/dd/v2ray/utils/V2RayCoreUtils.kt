@@ -40,14 +40,6 @@ object V2RayCoreUtils {
         logCallback?.invoke("[CRASH DETAIL] $tag: $errorMsg")
         val lines = fullTrace.lines().take(4).joinToString(" -> ")
         logCallback?.invoke("[TRACE] $lines")
-
-        try {
-            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (downloadDir != null && downloadDir.exists()) {
-                val crashFile = File(downloadDir, "ddv2ray_crash.txt")
-                crashFile.appendText("=== $tag ===\n$errorMsg\n$fullTrace\n\n")
-            }
-        } catch (_: Exception) {}
     }
 
     fun copyAssetsIfNeeded(context: Context, logCallback: ((String) -> Unit)? = null) {
@@ -106,6 +98,7 @@ object V2RayCoreUtils {
                     put("loglevel", "warning")
                 })
 
+                // INBOUND YANG BENAR: SOCKS + HTTP (Port eksplisit, hindari error AnyIP no port)
                 val inbounds = JSONArray()
                 inbounds.put(JSONObject().apply {
                     put("tag", "socks")
@@ -122,11 +115,10 @@ object V2RayCoreUtils {
                     })
                 })
                 inbounds.put(JSONObject().apply {
-                    put("tag", "tun-in")
-                    put("protocol", "tun")
-                    put("settings", JSONObject().apply {
-                        put("network", "tcp,udp")
-                    })
+                    put("tag", "http")
+                    put("port", 10809)
+                    put("listen", "127.0.0.1")
+                    put("protocol", "http")
                     put("sniffing", JSONObject().apply {
                         put("enabled", true)
                         put("destOverride", JSONArray().put("http").put("tls"))
@@ -134,6 +126,7 @@ object V2RayCoreUtils {
                 })
                 root.put("inbounds", inbounds)
 
+                // OUTBOUNDS
                 val outbounds = JSONArray()
                 val vlessOutbound = JSONObject().apply {
                     put("tag", "proxy")
@@ -188,12 +181,13 @@ object V2RayCoreUtils {
                 })
                 root.put("outbounds", outbounds)
 
+                // ROUTING
                 val routing = JSONObject()
                 routing.put("domainStrategy", "AsIs")
                 val rules = JSONArray()
                 rules.put(JSONObject().apply {
                     put("type", "field")
-                    put("inboundTag", JSONArray().put("tun-in").put("socks"))
+                    put("inboundTag", JSONArray().put("socks").put("http"))
                     put("outboundTag", "proxy")
                 })
                 routing.put("rules", rules)
@@ -303,28 +297,14 @@ object V2RayCoreUtils {
     }
 
     private fun runSafeDiagnose(logCallback: ((String) -> Unit)?) {
-        logCallback?.invoke("[DIAGNOSA] Memulai tes jalur data...")
+        logCallback?.invoke("[DIAGNOSA] Memeriksa port SOCKS...")
         try {
             Socket().use { s ->
-                s.connect(InetSocketAddress("127.0.0.1", 10808), 1200)
+                s.connect(InetSocketAddress("127.0.0.1", 10808), 1500)
             }
-            logCallback?.invoke("[PORT 10808] TERBUKA")
+            logCallback?.invoke("[PORT 10808] TERBUKA! Core sukses running.")
         } catch (e: Exception) {
             logCallback?.invoke("[PORT 10808] TERTUTUP: ${e.message}")
-        }
-
-        try {
-            val t0 = System.currentTimeMillis()
-            val url = URL("https://connectivitycheck.gstatic.com/generate_204")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
-            conn.instanceFollowRedirects = false
-            val code = conn.responseCode
-            val ping = System.currentTimeMillis() - t0
-            logCallback?.invoke("[PING] HTTP $code ($ping ms)")
-        } catch (e: Exception) {
-            logCallback?.invoke("[PING] Error: ${e.message}")
         }
     }
 
