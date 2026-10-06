@@ -1,21 +1,30 @@
 package com.dd.v2ray
 
+import android.Manifest
 import android.app.Activity
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.dd.v2ray.service.V2RayVpnService
 import com.dd.v2ray.utils.V2RayCoreUtils
 import com.journeyapps.barcodescanner.ScanContract
@@ -123,6 +132,43 @@ class MainActivity : AppCompatActivity() {
                 prepareAndStartVpn()
             }
         }
+
+        // Tampilkan dialog izin penyimpanan saat baru dibuka
+        checkAndRequestStoragePermission()
+    }
+
+    private fun checkAndRequestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                AlertDialog.Builder(this)
+                    .setTitle("Izin Penyimpanan")
+                    .setMessage("Aplikasi butuh akses penyimpanan untuk menyimpan log error crash ke folder Download (/sdcard/Download/).")
+                    .setPositiveButton("Beri Izin") { _, _ ->
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                data = Uri.parse("package:$packageName")
+                            }
+                            startActivity(intent)
+                        } catch (_: Exception) {
+                            val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                            startActivity(intent)
+                        }
+                    }
+                    .setNegativeButton("Batal", null)
+                    .show()
+            }
+        } else {
+            val permissions = arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+            val needed = permissions.filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (needed.isNotEmpty()) {
+                ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
+            }
+        }
     }
 
     private fun appendLog(text: String) {
@@ -136,7 +182,7 @@ class MainActivity : AppCompatActivity() {
     private fun processAndLoadConfig(rawUrl: String) {
         appendLog("[PARSE] Mengonversi URL ke JSON format V2RayNG...")
         val json = V2RayCoreUtils.parseUrlToJson(rawUrl)
-        if (json.isNotEmpty()) {
+        if (json.isNotEmpty() && json != "{}") {
             currentConfigJson = json
             val proto = rawUrl.substringBefore("://")
             tvConfigSummary.text = "Config siap: $proto (Converted)"
